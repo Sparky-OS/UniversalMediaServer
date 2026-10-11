@@ -135,6 +135,9 @@ public class ConnectedRenderers {
 		} finally {
 			RENDERER_LOCK.unlock();
 		}
+		if (renderer != null) {
+			renderer.updateReportedPanel(userAgentString);
+		}
 		return renderer;
 	}
 

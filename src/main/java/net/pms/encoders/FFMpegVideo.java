@@ -309,6 +309,13 @@ public class FFMpegVideo extends Engine {
 			!stereoLayout.equals(renderer3DOutputFormat)
 		) {
 			filterChain.add("stereo3d=" + stereoLayout + ":" + renderer3DOutputFormat);
+			if (renderer3DOutputFormat.equals("sbsl") || renderer3DOutputFormat.equals("sbsr")) {
+				filterChain.add("scale=iw*sar:ih,setsar=1");
+				if (renderer.isMaximumResolutionSpecified()) {
+					filterChain.add("scale=" + renderer.getMaxVideoWidth() + ":" + renderer.getMaxVideoHeight()
+						+ ":force_original_aspect_ratio=decrease:force_divisible_by=2");
+				}
+			}
 		}
 
 		if (!filterChain.isEmpty()) {

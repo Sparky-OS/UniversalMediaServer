@@ -30,6 +30,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import net.pms.Messages;
 import net.pms.PMS;
+import net.pms.configuration.ReportedPanel;
 import net.pms.configuration.RendererConfiguration;
 import net.pms.configuration.RendererConfigurations;
 import net.pms.configuration.RendererDeviceConfiguration;
@@ -331,6 +332,57 @@ public class Renderer extends RendererDeviceConfiguration {
 	 */
 	public Map<String, String> getUpnpDetails() {
 		return JUPnPDeviceHelper.getDeviceDetails(uuid);
+	}
+
+	private volatile int[] httpPanel;
+
+	public void updateReportedPanel(String userAgent) {
+		if (getBoolean("UseReportedPanelSize", false)) {
+			int[] panel = ReportedPanel.parse(userAgent);
+			if (panel != null) {
+				httpPanel = panel;
+			}
+		}
+	}
+
+	private int[] reportedPanel() {
+		if (!getBoolean("UseReportedPanelSize", false)) {
+			return null;
+		}
+		if (httpPanel != null) {
+			return httpPanel;
+		}
+		List<String> headers = getIdentifiers();
+		if (headers != null) {
+			for (String header : headers) {
+				int[] panel = ReportedPanel.parse(header);
+				if (panel != null) {
+					return panel;
+				}
+			}
+		}
+		Map<String, String> device = getUpnpDetails();
+		if (device != null) {
+			for (String detail : device.values()) {
+				int[] panel = ReportedPanel.parse(detail);
+				if (panel != null) {
+					return panel;
+				}
+			}
+		}
+		return null;
+	}
+
+	@Override
+	public int getMaxVideoWidth() {
+		int[] panel = reportedPanel();
+		return panel == null ? super.getMaxVideoWidth() : panel[0];
+	}
+
+	@Override
+	public int getMaxVideoHeight() {
+		int[] panel = reportedPanel();
+		return panel == null ? super.getMaxVideoHeight() : panel[1];
 	}
 
 	public boolean isUpnp() {
