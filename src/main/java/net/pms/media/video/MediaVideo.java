@@ -776,7 +776,11 @@ public class MediaVideo extends MediaLang implements Cloneable {
 				"half top-bottom (left eye first)",
 				"half top-bottom (right eye first)",
 				"half side by side (left eye first)",
-				"half side by side (right eye first)" -> false;
+				"half side by side (right eye first)",
+				"row interleaved (left eye first)",
+				"row interleaved (right eye first)",
+				"column interleaved (left eye first)",
+				"column interleaved (right eye first)" -> false;
 			default -> true;
 		};
 	}
@@ -810,6 +814,18 @@ public class MediaVideo extends MediaLang implements Cloneable {
 			}
 			case "half side by side (right eye first)" -> {
 				return Mode3D.SBS2R;
+			}
+			case "row interleaved (left eye first)" -> {
+				return Mode3D.IRL;
+			}
+			case "row interleaved (right eye first)" -> {
+				return Mode3D.IRR;
+			}
+			case "column interleaved (left eye first)" -> {
+				return Mode3D.ICL;
+			}
+			case "column interleaved (right eye first)" -> {
+				return Mode3D.ICR;
 			}
 			case "arcg" -> {
 				return Mode3D.ARCG;
@@ -1111,6 +1127,10 @@ public class MediaVideo extends MediaLang implements Cloneable {
 		ABR,
 		AB2L,
 		AB2R,
+		IRL,
+		IRR,
+		ICL,
+		ICR,
 		ARCG,
 		ARCH,
 		ARCC,

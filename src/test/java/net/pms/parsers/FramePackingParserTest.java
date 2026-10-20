@@ -104,6 +104,15 @@ class FramePackingParserTest {
 	}
 
 	@Test
+	void interleavedLayouts() {
+		for (String type : new String[] {"interleaved lines", "interleaved columns"}) {
+			String layout = type.equals("interleaved lines") ? "row interleaved" : "column interleaved";
+			assertEquals(layout + " (left eye first)", FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - " + type + ", view - packed, primary_eye - none"), 1280, 720));
+			assertEquals(layout + " (right eye first)", FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - " + type + " (inverted), view - packed, primary_eye - none"), 1280, 720));
+		}
+	}
+
+	@Test
 	void layoutsWithoutAModeAreIgnored() {
 		assertNull(FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - checkerboard, view - packed, primary_eye - none"), 1920, 1080));
 		assertNull(FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - frame alternate, view - left, primary_eye - none"), 1920, 1080));
@@ -127,10 +136,10 @@ class FramePackingParserTest {
 		assertLayout("top-bottom (left eye first)", Mode3D.ABL, "video-h265_frame_packing_top_bottom_left_first.mp4");
 		assertLayout("half top-bottom (right eye first)", Mode3D.AB2R, "video-h265_frame_packing_top_bottom_right_first.ts");
 
-		// The other frame packing arrangements have no 3D mode
+		// Interleaved inputs have conversion modes; the other arrangements stay unsupported
 		assertNot3d("video-h264_frame_packing_checkerboard.mp4");
-		assertNot3d("video-h264_frame_packing_column_interleaving.mp4");
-		assertNot3d("video-h264_frame_packing_row_interleaving.mp4");
+		assertLayout("column interleaved (left eye first)", Mode3D.ICL, "video-h264_frame_packing_column_interleaving.mp4");
+		assertLayout("row interleaved (left eye first)", Mode3D.IRL, "video-h264_frame_packing_row_interleaving.mp4");
 		assertNot3d("video-h264_frame_packing_temporal_interleaving.mp4");
 		assertNot3d("video-h264_frame_packing_2d.mp4");
 		assertNot3d("video-h265_frame_packing_temporal_interleaving.mp4");

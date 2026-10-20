@@ -312,7 +312,14 @@ public class FFMpegVideo extends Engine {
 			StringUtils.isNotBlank(renderer3DOutputFormat) &&
 			!stereoLayout.equals(renderer3DOutputFormat)
 		) {
-			filterChain.add("stereo3d=" + stereoLayout + ":" + renderer3DOutputFormat);
+			if ("icr".equals(stereoLayout)) {
+				// FFmpeg 6.1 and 8.1 swap the eyes for icr input. Read the columns and swap explicitly.
+				filterChain.add("stereo3d=icl:sbsr");
+				stereoLayout = "sbsl";
+			}
+			if (!stereoLayout.equals(renderer3DOutputFormat)) {
+				filterChain.add("stereo3d=" + stereoLayout + ":" + renderer3DOutputFormat);
+			}
 		}
 
 		if (!filterChain.isEmpty()) {
@@ -609,7 +616,7 @@ public class FFMpegVideo extends Engine {
 			return "3";
 		} else if (outputLayout.startsWith("ab")) {
 			return "4";
-		} else if (outputLayout.startsWith("ir")) {
+		} else if (outputLayout.equals("irl")) {
 			return "2";
 		}
 
