@@ -116,7 +116,7 @@ class StereoRendererGeometryTest {
 		int[] size = outputSize(output, 192, 128);
 		List<String> expected = input == output ? List.of() : List.of("-filter_complex", "[0:v]stereo3d=" +
 			input.name().toLowerCase(Locale.ROOT) + ":" + output.name().toLowerCase(Locale.ROOT) +
-			",scale=" + size[0] + ":" + size[1] + ",setsar=1");
+			",scale=" + size[0] + ":" + size[1] + ",setsar=1,sidedata=mode=delete:type=STEREO3D");
 		assertEquals(expected, filters(media(input, 192, 128), renderer(output)));
 	}
 
@@ -130,7 +130,12 @@ class StereoRendererGeometryTest {
 	}
 
 	void ffprobeMeasuresEveryInputAndOutput(Mode3D input, Mode3D output, int eyeWidth, int eyeHeight) throws Exception {
+		ffprobeMeasuresEveryInputAndOutput(input, output, eyeWidth, eyeHeight, 1.0);
+	}
+
+	void ffprobeMeasuresEveryInputAndOutput(Mode3D input, Mode3D output, int eyeWidth, int eyeHeight, double sar) throws Exception {
 		MediaInfo media = media(input, eyeWidth, eyeHeight);
+		media.getDefaultVideoTrack().setPixelAspectRatio(sar);
 		int width = media.getWidth();
 		int height = media.getHeight();
 		byte[] pixels = new byte[width * height * 3];
@@ -148,12 +153,12 @@ class StereoRendererGeometryTest {
 		Files.write(source.toPath(), pixels);
 		File converted = new File(tempDir, "converted.nut");
 		Files.deleteIfExists(converted.toPath());
-		String ffmpeg = EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO);
+		String ffmpeg = System.getProperty("ums.test.stereo.ffmpeg", EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO));
 		assertNotNull(ffmpeg, "FFmpeg is required for the renderer geometry matrix");
 		File packed = new File(tempDir, input.name() + ".nut");
 		if (!packed.exists()) {
 			String generated = ProcessUtil.run(ffmpeg, "-nostdin", "-y", "-f", "rawvideo", "-pixel_format", "rgb24", "-video_size",
-				width + "x" + height, "-i", source.getAbsolutePath(), "-vf", "setsar=1", "-frames:v", "1", "-c:v", "ffv1", "-pix_fmt", "gbrp", "-threads", "1", packed.getAbsolutePath());
+				width + "x" + height, "-i", source.getAbsolutePath(), "-vf", "setsar=" + sar, "-frames:v", "1", "-c:v", "ffv1", "-pix_fmt", "gbrp", "-threads", "1", packed.getAbsolutePath());
 			assertTrue(packed.length() > 0, generated);
 		}
 		List<String> command = new ArrayList<>(List.of(ffmpeg, "-nostdin", "-y", "-threads", "1",
@@ -164,7 +169,7 @@ class StereoRendererGeometryTest {
 		assertTrue(converted.length() > 0, log);
 		String probe = ProcessUtil.run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
 			"stream=width,height,sample_aspect_ratio", "-of", "default=noprint_wrappers=1", converted.getAbsolutePath());
-		int[] expected = outputSize(output, eyeWidth, eyeHeight);
+		int[] expected = outputSize(output, (int) Math.round(eyeWidth * sar), eyeHeight);
 		assertTrue(probe.contains("width=" + expected[0] + "\n"), probe);
 		assertTrue(probe.contains("height=" + expected[1] + "\n"), probe);
 		assertTrue(probe.contains("sample_aspect_ratio=1:1"), probe);
@@ -206,10 +211,10 @@ class StereoRendererGeometryTest {
 				MediaInfoParser.parse(media, source, Format.VIDEO);
 				List<String> filters = filters(media, renderer(output), source);
 				int[] size = outputSize(output, 1280, 720);
-				assertTrue(filters.get(1).endsWith(",scale=" + size[0] + ":" + size[1] + ",setsar=1"), filters.toString());
+				assertTrue(filters.get(1).endsWith(",scale=" + size[0] + ":" + size[1] + ",setsar=1,sidedata=mode=delete:type=STEREO3D"), filters.toString());
 				File converted = new File(tempDir, "native.nut");
 				Files.deleteIfExists(converted.toPath());
-				String ffmpeg = EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO);
+				String ffmpeg = System.getProperty("ums.test.stereo.ffmpeg", EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO));
 				List<String> cmd = new ArrayList<>(List.of(ffmpeg, "-nostdin", "-y", "-i", source.getAbsolutePath()));
 				cmd.addAll(filters);
 				cmd.addAll(List.of("-filter_complex_threads", "1", "-frames:v", "1", "-c:v", "ffv1", "-threads", "1", converted.getAbsolutePath()));
@@ -230,6 +235,13 @@ class StereoRendererGeometryTest {
 	}
 
 	@Test
+	void anamorphicSamplesUseTheirDisplayWidth() throws Exception {
+		for (Mode3D output : List.of(Mode3D.AB2R, Mode3D.ML, Mode3D.SBSR)) {
+			ffprobeMeasuresEveryInputAndOutput(Mode3D.SBS2L, output, 1440, 1080, 4.0 / 3);
+		}
+	}
+
+	@Test
 	void rendererLimitsAreAppliedAfterRepacking() throws Exception {
 		Renderer renderer = new Renderer((String) null) {
 			@Override
@@ -243,9 +255,9 @@ class StereoRendererGeometryTest {
 		};
 		String chain = filters(media(Mode3D.AB2L, 1920, 1080), renderer).get(1);
 		assertTrue(chain.startsWith("[0:v]stereo3d=ab2l:sbs2l,scale=1920:1080,setsar=1,scale="), chain);
-		assertTrue(chain.endsWith("setsar=1"), chain);
+		assertTrue(chain.endsWith("setsar=1,sidedata=mode=delete:type=STEREO3D"), chain);
 		File converted = new File(tempDir, "limited.nut");
-		String ffmpeg = EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO);
+		String ffmpeg = System.getProperty("ums.test.stereo.ffmpeg", EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO));
 		List<String> cmd = new ArrayList<>(List.of(ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i", "color=red:s=1920x1080:r=1:d=1"));
 		cmd.addAll(filters(media(Mode3D.AB2L, 1920, 1080), renderer));
 		cmd.addAll(List.of("-filter_complex_threads", "1", "-frames:v", "1", "-c:v", "ffv1", "-threads", "1", converted.getAbsolutePath()));
@@ -269,6 +281,6 @@ class StereoRendererGeometryTest {
 		File source = ParserTest.getTestFile("video-h264_stereomode_side_by_side_left_first.mkv");
 		MediaInfo media = new MediaInfo();
 		MediaInfoParser.parse(media, source, Format.VIDEO);
-		assertEquals(List.of("-filter_complex", "[0:v]stereo3d=sbsl:abl,scale=640:1440,setsar=1"), filters(media, renderer(Mode3D.ABL), source));
+		assertEquals(List.of("-filter_complex", "[0:v]stereo3d=sbsl:abl,scale=640:1440,setsar=1,sidedata=mode=delete:type=STEREO3D"), filters(media, renderer(Mode3D.ABL), source));
 	}
 }

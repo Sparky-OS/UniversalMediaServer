@@ -322,6 +322,9 @@ public class FFMpegVideo extends Engine {
 			if (!scalePadFilterChain.isEmpty()) {
 				filterChain.add("setsar=1");
 			}
+			// x264 reads frame side data too. The source mark must not override
+			// the output declaration, or survive a mono/anaglyph conversion.
+			filterChain.add("sidedata=mode=delete:type=STEREO3D");
 		}
 
 		if (!filterChain.isEmpty()) {
@@ -470,6 +473,7 @@ public class FFMpegVideo extends Engine {
 
 			MediaVideo defaultVideoTrack = media.getDefaultVideoTrack();
 			if (defaultVideoTrack != null || type() == Format.VIDEO) {
+				String selectedTranscodeAccelerationMethod = null;
 				if (canMuxVideoWithFFmpeg && defaultVideoTrack != null) {
 					if (!customFFmpegOptions.contains("-c:v")) {
 						transcodeOptions.add("-c:v");
@@ -486,8 +490,6 @@ public class FFMpegVideo extends Engine {
 						transcodeOptions.add("mpeg2video");
 					}
 				} else {
-					String selectedTranscodeAccelerationMethod = null;
-
 					if (!customFFmpegOptions.contains("-c:v")) {
 						transcodeOptions.add("-c:v");
 
@@ -517,20 +519,6 @@ public class FFMpegVideo extends Engine {
 							transcodeOptions.add("31");
 						}
 
-						// Signal frame-packed 3D in the elementary stream,
-						// otherwise renderers that auto-detect 3D show the video flat.
-						// x264 does not write the message for a right eye first layout, h264_metadata does
-						String framePackingFilter = getFramePackingBitstreamFilter(getOutputLayout(defaultVideoTrack, renderer), "h264_metadata", getExecutable());
-						if (framePackingFilter != null && !customFFmpegOptions.contains("-bsf")) {
-							transcodeOptions.add("-bsf:v");
-							transcodeOptions.add(framePackingFilter);
-						} else if (!customFFmpegOptions.contains("-x264-params")) {
-							String framePackingArrangement = getFramePackingArrangement(defaultVideoTrack, renderer);
-							if (framePackingArrangement != null) {
-								transcodeOptions.add("-x264-params");
-								transcodeOptions.add("frame-packing=" + framePackingArrangement);
-							}
-						}
 
 						// do not use -tune zerolatency for compatibility problems, particularly Panasonic TVs
 					} else if (selectedTranscodeAccelerationMethod.startsWith("libx265")) {
@@ -539,17 +527,34 @@ public class FFMpegVideo extends Engine {
 							transcodeOptions.add("superfast");
 						}
 
-						// x265 does not write the message, hevc_metadata does
-						String framePackingFilter = getFramePackingBitstreamFilter(getOutputLayout(defaultVideoTrack, renderer), "hevc_metadata", getExecutable());
-						if (framePackingFilter != null && !customFFmpegOptions.contains("-bsf")) {
-							transcodeOptions.add("-bsf:v");
-							transcodeOptions.add(framePackingFilter);
-						}
+
 					}
 
 					if ((defaultVideoTrack != null && defaultVideoTrack.getBitDepth() == 8) || !renderer.isVideoBitDepthSupportedForAllFiletypes(10)) {
 						transcodeOptions.add("-pix_fmt");
 						transcodeOptions.add("yuv420p");
+					}
+				}
+
+				if (!canMuxVideoWithFFmpeg && getFramePackingFilterOptions(getOutputLayout(defaultVideoTrack, renderer)) != null) {
+					if (encodingFormat.isTranscodeToMPEG2()) {
+						LOGGER.warn("Renderer \"{}\" selects MPEG-2 for 3D output {}. MPEG-2 cannot carry the frame packing SEI; automatic 3D detection needs H.264 or H.265.",
+							renderer.getRendererName(), renderer.getOutput3DFormat());
+					} else if ((encodingFormat.isTranscodeToH264() || encodingFormat.isTranscodeToH265()) &&
+						!customFFmpegOptions.contains("-c:v") && !customFFmpegOptions.contains("-bsf")) {
+						String filter = encodingFormat.isTranscodeToH264() ? "h264_metadata" : "hevc_metadata";
+						String packing = getFramePackingBitstreamFilter(getOutputLayout(defaultVideoTrack, renderer), filter, getExecutable());
+						if (packing != null) {
+							transcodeOptions.add("-bsf:v");
+							transcodeOptions.add(packing);
+						} else if (selectedTranscodeAccelerationMethod != null && selectedTranscodeAccelerationMethod.startsWith("libx264") &&
+							!customFFmpegOptions.contains("-x264-params") && getFramePackingArrangement(defaultVideoTrack, renderer) != null) {
+							transcodeOptions.add("-x264-params");
+							transcodeOptions.add("frame-packing=" + getFramePackingArrangement(defaultVideoTrack, renderer));
+						} else {
+							LOGGER.warn("FFmpeg cannot declare 3D output {} with encoder {}: the {} frame_packing option is unavailable.",
+								renderer.getOutput3DFormat(), selectedTranscodeAccelerationMethod, filter);
+						}
 					}
 				}
 
@@ -611,6 +616,10 @@ public class FFMpegVideo extends Engine {
 				return null;
 			}
 			outputLayout = sourceLayout.toString().toLowerCase(Locale.ROOT);
+		}
+
+		if (outputLayout.endsWith("r")) {
+			return null;
 		}
 
 		// Anything else is either 2D output (ml, mr) or anaglyph, which is not frame-packed
