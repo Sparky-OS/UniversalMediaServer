@@ -131,7 +131,12 @@ public class FFMpegVideo extends Engine {
 		MediaVideo defaultVideoTrack = mediaInfo != null ? mediaInfo.getDefaultVideoTrack() : null;
 
 		boolean isMediaValid = mediaInfo != null && mediaInfo.isMediaParsed() && defaultVideoTrack != null && defaultVideoTrack.getHeight() != 0;
-		boolean isResolutionTooHighForRenderer = isMediaValid && defaultVideoTrack != null && !renderer.isResolutionCompatibleWithRenderer(defaultVideoTrack.getWidth(), defaultVideoTrack.getHeight());
+		MediaVideo.Mode3D input3D = defaultVideoTrack != null ? defaultVideoTrack.get3DLayout() : null;
+		String output3D = renderer.getOutput3DFormat();
+		boolean convert3D = input3D != null && !defaultVideoTrack.multiViewIsAnaglyph() && StringUtils.isNotBlank(output3D) &&
+			!input3D.name().equalsIgnoreCase(output3D);
+		Stereo3DGeometry.Size outputSize = convert3D ? Stereo3DGeometry.outputSize(resource, mediaInfo,
+			MediaVideo.Mode3D.valueOf(output3D.toUpperCase(Locale.ROOT))) : null;
 
 		int scaleWidth = 0;
 		int scaleHeight = 0;
@@ -140,17 +145,25 @@ public class FFMpegVideo extends Engine {
 			scaleHeight = defaultVideoTrack.getHeight();
 		}
 
+		if (outputSize != null) {
+			scaleWidth = outputSize.width();
+			scaleHeight = outputSize.height();
+		}
+		boolean applyRendererLimits = !convert3D || renderer.isMaximumResolutionConfigured();
+		boolean isResolutionTooHighForRenderer = applyRendererLimits && isMediaValid && !renderer.isResolutionCompatibleWithRenderer(scaleWidth, scaleHeight);
+
 		boolean is3D = (defaultVideoTrack != null && defaultVideoTrack.is3d() && !defaultVideoTrack.multiViewIsAnaglyph()) || isConvertedTo3d;
 
 		// Make sure the aspect ratio is 16/9 if the renderer needs it.
 		boolean keepAR = (renderer.isKeepAspectRatio() || renderer.isKeepAspectRatioTranscoding()) &&
-				(defaultVideoTrack != null && !defaultVideoTrack.is3dFullSbsOrOu()) && !isConvertedTo3d &&
+				(convert3D ? !output3D.equals("sbsl") && !output3D.equals("sbsr") && !output3D.equals("abl") && !output3D.equals("abr") :
+				defaultVideoTrack != null && !defaultVideoTrack.is3dFullSbsOrOu()) && !isConvertedTo3d &&
 				(!"16:9".equals(defaultVideoTrack.getDisplayAspectRatio()));
 
 		// Scale and pad the video if necessary
 		ArrayList<String> scalePadFilterChain = new ArrayList<>();
-		if (isResolutionTooHighForRenderer || (!renderer.isRescaleByRenderer() && renderer.isMaximumResolutionSpecified() && mediaInfo.getWidth() < 720)) { // Do not rescale for SD video and higher
-			if (defaultVideoTrack != null && defaultVideoTrack.is3dFullSbsOrOu()) {
+		if (isResolutionTooHighForRenderer || (applyRendererLimits && !renderer.isRescaleByRenderer() && renderer.isMaximumResolutionSpecified() && scaleWidth < 720)) { // Do not rescale for SD video and higher
+			if (!convert3D && defaultVideoTrack != null && defaultVideoTrack.is3dFullSbsOrOu()) {
 				scalePadFilterChain.add(String.format("scale=%1$d:%2$d", renderer.getMaxVideoWidth(), renderer.getMaxVideoHeight()));
 			} else {
 				scalePadFilterChain.add(String.format("scale=iw*min(%1$d/iw\\,%2$d/ih):ih*min(%1$d/iw\\,%2$d/ih)", renderer.getMaxVideoWidth(), renderer.getMaxVideoHeight()));
@@ -161,7 +174,7 @@ public class FFMpegVideo extends Engine {
 				}
 			}
 		} else if (keepAR && isMediaValid) {
-			if ((mediaInfo.getWidth() / (double) mediaInfo.getHeight()) >= (16 / (double) 9)) {
+			if ((scaleWidth / (double) scaleHeight) >= (16 / (double) 9)) {
 				scalePadFilterChain.add("pad=iw:iw/(16/9):0:(oh-ih)/2");
 				scaleHeight = (int) Math.round(scaleWidth / (16 / (double) 9));
 			} else {
@@ -174,8 +187,8 @@ public class FFMpegVideo extends Engine {
 
 			// Make sure we didn't exceed the renderer's maximum resolution.
 			if (
-				scaleHeight > renderer.getMaxVideoHeight() ||
-				scaleWidth  > renderer.getMaxVideoWidth()
+				applyRendererLimits && (scaleHeight > renderer.getMaxVideoHeight() ||
+				scaleWidth  > renderer.getMaxVideoWidth())
 			) {
 				scaleHeight = renderer.getMaxVideoHeight();
 				scaleWidth  = renderer.getMaxVideoWidth();
@@ -183,7 +196,9 @@ public class FFMpegVideo extends Engine {
 
 			scalePadFilterChain.add("scale=" + scaleWidth + ":" + scaleHeight);
 		}
-		filterChain.addAll(scalePadFilterChain);
+		if (!convert3D) {
+			filterChain.addAll(scalePadFilterChain);
+		}
 
 		boolean override = true;
 		if (renderer instanceof OutputOverride or) {
@@ -298,21 +313,19 @@ public class FFMpegVideo extends Engine {
 			filterChain.add(overrideVF);
 		}
 
-		// Convert 3D video to the other output 3D format or to 2D using "Output3DFormat = ml" or "Output3DFormat = mr" in the renderer conf
-		String stereoLayout = null;
-		String renderer3DOutputFormat = null;
-		if (defaultVideoTrack != null && defaultVideoTrack.get3DLayout() != null) {
-			stereoLayout = defaultVideoTrack.get3DLayout().toString().toLowerCase(Locale.ROOT);
-			renderer3DOutputFormat = renderer.getOutput3DFormat();
-		}
-
-		if (
-			is3D &&
-			stereoLayout != null &&
-			StringUtils.isNotBlank(renderer3DOutputFormat) &&
-			!stereoLayout.equals(renderer3DOutputFormat)
-		) {
-			filterChain.add("stereo3d=" + stereoLayout + ":" + renderer3DOutputFormat);
+		if (convert3D) {
+			// Discard the source declaration before repacking. A stereo3d filter
+			// that writes the output layout must keep it for the encoder.
+			filterChain.add("sidedata=mode=delete:type=STEREO3D");
+			filterChain.add("stereo3d=" + input3D.name().toLowerCase(Locale.ROOT) + ":" + output3D);
+			// stereo3d repacks samples and changes SAR; it does not resample to
+			// the display raster a network renderer needs for the chosen format.
+			filterChain.add("scale=" + outputSize.width() + ":" + outputSize.height());
+			filterChain.add("setsar=1");
+			filterChain.addAll(scalePadFilterChain);
+			if (!scalePadFilterChain.isEmpty()) {
+				filterChain.add("setsar=1");
+			}
 		}
 
 		if (!filterChain.isEmpty()) {
@@ -461,15 +474,12 @@ public class FFMpegVideo extends Engine {
 
 			MediaVideo defaultVideoTrack = media.getDefaultVideoTrack();
 			if (defaultVideoTrack != null || type() == Format.VIDEO) {
+				String selectedTranscodeAccelerationMethod = null;
 				if (canMuxVideoWithFFmpeg && defaultVideoTrack != null) {
 					if (!customFFmpegOptions.contains("-c:v")) {
 						transcodeOptions.add("-c:v");
 						transcodeOptions.add("copy");
-						String framePackingFilter = getFramePackingBitstreamFilter(defaultVideoTrack, getExecutable());
-						if (framePackingFilter != null && !customFFmpegOptions.contains("-bsf")) {
-							transcodeOptions.add("-bsf:v");
-							transcodeOptions.add(framePackingFilter);
-						}
+
 					}
 				} else if (encodingFormat.isTranscodeToMPEG2() && !dtsRemux) {
 					if (!customFFmpegOptions.contains("-c:v")) {
@@ -477,8 +487,6 @@ public class FFMpegVideo extends Engine {
 						transcodeOptions.add("mpeg2video");
 					}
 				} else {
-					String selectedTranscodeAccelerationMethod = null;
-
 					if (!customFFmpegOptions.contains("-c:v")) {
 						transcodeOptions.add("-c:v");
 
@@ -508,20 +516,6 @@ public class FFMpegVideo extends Engine {
 							transcodeOptions.add("31");
 						}
 
-						// Signal frame-packed 3D in the elementary stream,
-						// otherwise renderers that auto-detect 3D show the video flat.
-						// x264 does not write the message for a right eye first layout, h264_metadata does
-						String framePackingFilter = getFramePackingBitstreamFilter(getOutputLayout(defaultVideoTrack, renderer), "h264_metadata", getExecutable());
-						if (framePackingFilter != null && !customFFmpegOptions.contains("-bsf")) {
-							transcodeOptions.add("-bsf:v");
-							transcodeOptions.add(framePackingFilter);
-						} else if (!customFFmpegOptions.contains("-x264-params")) {
-							String framePackingArrangement = getFramePackingArrangement(defaultVideoTrack, renderer);
-							if (framePackingArrangement != null) {
-								transcodeOptions.add("-x264-params");
-								transcodeOptions.add("frame-packing=" + framePackingArrangement);
-							}
-						}
 
 						// do not use -tune zerolatency for compatibility problems, particularly Panasonic TVs
 					} else if (selectedTranscodeAccelerationMethod.startsWith("libx265")) {
@@ -530,17 +524,34 @@ public class FFMpegVideo extends Engine {
 							transcodeOptions.add("superfast");
 						}
 
-						// x265 does not write the message, hevc_metadata does
-						String framePackingFilter = getFramePackingBitstreamFilter(getOutputLayout(defaultVideoTrack, renderer), "hevc_metadata", getExecutable());
-						if (framePackingFilter != null && !customFFmpegOptions.contains("-bsf")) {
-							transcodeOptions.add("-bsf:v");
-							transcodeOptions.add(framePackingFilter);
-						}
+
 					}
 
 					if ((defaultVideoTrack != null && defaultVideoTrack.getBitDepth() == 8) || !renderer.isVideoBitDepthSupportedForAllFiletypes(10)) {
 						transcodeOptions.add("-pix_fmt");
 						transcodeOptions.add("yuv420p");
+					}
+				}
+
+				MediaVideo.Mode3D outputLayout = getOutputLayout(defaultVideoTrack, renderer);
+				if (!canMuxVideoWithFFmpeg && outputLayout != null &&
+					(outputLayout.name().startsWith("SBS") || outputLayout.name().startsWith("AB"))) {
+					if (encodingFormat.isTranscodeToMPEG2()) {
+						LOGGER.warn("Renderer \"{}\" selects MPEG-2 for 3D output {}. MPEG-2 requires the output layout in frame Stereo3D side data to write its JP3D user data mark. The current FFmpeg stereo3d filter does not write that output layout; use left-eye-first H.264 with libx264 for automatic 3D switching until it does.",
+							renderer.getRendererName(), renderer.getOutput3DFormat());
+					} else if ((encodingFormat.isTranscodeToH264() || encodingFormat.isTranscodeToH265()) &&
+						!customFFmpegOptions.contains("-c:v")) {
+						String packing = getFramePackingArrangement(defaultVideoTrack, renderer);
+						if (encodingFormat.isTranscodeToH264() &&
+							(selectedTranscodeAccelerationMethod == null || selectedTranscodeAccelerationMethod.startsWith("libx264")) && packing != null) {
+							if (!customFFmpegOptions.contains("-x264-params")) {
+								transcodeOptions.add("-x264-params");
+								transcodeOptions.add("frame-packing=" + packing);
+							}
+						} else {
+							LOGGER.warn("Cannot automatically declare 3D output {} with encoder {}. Stock FFmpeg supports left-eye-first H.264 through libx264; H.265 and right-eye-first output need an encoder with a matching frame packing declaration.",
+								renderer.getOutput3DFormat(), selectedTranscodeAccelerationMethod);
+						}
 					}
 				}
 
@@ -604,6 +615,10 @@ public class FFMpegVideo extends Engine {
 			outputLayout = sourceLayout.toString().toLowerCase(Locale.ROOT);
 		}
 
+		if (outputLayout.endsWith("r")) {
+			return null;
+		}
+
 		// Anything else is either 2D output (ml, mr) or anaglyph, which is not frame-packed
 		if (outputLayout.startsWith("sbs")) {
 			return "3";
@@ -614,48 +629,6 @@ public class FFMpegVideo extends Engine {
 		}
 
 		return null;
-	}
-
-	/**
-	 * Returns the bitstream filter that writes the frame packing arrangement
-	 * SEI while the video is copied, or {@code null} when the video is not
-	 * frame-packed 3D, is not H.264 or H.265, or FFmpeg cannot write it.
-	 *
-	 * A container-level stereoscopic tag, like Matroska's {@code StereoMode},
-	 * does not survive a remux to MPEG-TS, and the renderers that auto-detect
-	 * 3D read the in-stream SEI (see {@link #getFramePackingArrangement}).
-	 * Copying the video would drop the signal that re-encoding keeps, so the
-	 * message is written by {@code h264_metadata} or {@code hevc_metadata}
-	 * without touching the picture.
-	 *
-	 * @param defaultVideoTrack the video track being copied
-	 * @param ffmpegPath the FFmpeg executable
-	 * @return the value for {@code -bsf:v}, or {@code null}
-	 */
-	static String getFramePackingBitstreamFilter(MediaVideo defaultVideoTrack, String ffmpegPath) {
-		if (defaultVideoTrack == null || !defaultVideoTrack.is3d() || defaultVideoTrack.multiViewIsAnaglyph()) {
-			return null;
-		}
-
-		String filter;
-		if (defaultVideoTrack.isH264()) {
-			filter = "h264_metadata";
-		} else if (defaultVideoTrack.isH265()) {
-			filter = "hevc_metadata";
-		} else {
-			return null;
-		}
-
-		return getFramePackingBitstreamFilter(defaultVideoTrack.get3DLayout(), filter, ffmpegPath);
-	}
-
-	private static String getFramePackingBitstreamFilter(MediaVideo.Mode3D layout, String filter, String ffmpegPath) {
-		String options = getFramePackingFilterOptions(layout);
-		if (options == null || !FFmpegOptions.isFramePackingSupported(ffmpegPath, filter)) {
-			return null;
-		}
-
-		return filter + "=frame_packing=insert:" + options;
 	}
 
 	/**
@@ -677,29 +650,6 @@ public class FFMpegVideo extends Engine {
 		} catch (IllegalArgumentException e) {
 			return null;
 		}
-	}
-
-	/**
-	 * Returns the {@code h264_metadata} and {@code hevc_metadata} options for
-	 * a 3D layout. The SEI does not tell half from full resolution, so the
-	 * half and full layouts give the same options.
-	 *
-	 * @param layout the 3D layout of the video
-	 * @return the options, or {@code null} for a layout without a frame
-	 *         packing arrangement
-	 */
-	static String getFramePackingFilterOptions(MediaVideo.Mode3D layout) {
-		if (layout == null) {
-			return null;
-		}
-
-		return switch (layout) {
-			case SBSL, SBS2L -> "frame_packing_type=side_by_side:frame_packing_view=left_first";
-			case SBSR, SBS2R -> "frame_packing_type=side_by_side:frame_packing_view=right_first";
-			case ABL, AB2L -> "frame_packing_type=top_bottom:frame_packing_view=left_first";
-			case ABR, AB2R -> "frame_packing_type=top_bottom:frame_packing_view=right_first";
-			default -> null;
-		};
 	}
 
 	/**
