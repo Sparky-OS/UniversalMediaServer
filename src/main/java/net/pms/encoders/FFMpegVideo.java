@@ -539,7 +539,7 @@ public class FFMpegVideo extends Engine {
 
 				if (!canMuxVideoWithFFmpeg && getFramePackingFilterOptions(getOutputLayout(defaultVideoTrack, renderer)) != null) {
 					if (encodingFormat.isTranscodeToMPEG2()) {
-						LOGGER.warn("Renderer \"{}\" selects MPEG-2 for 3D output {}. MPEG-2 cannot carry the frame packing SEI; automatic 3D detection needs H.264 or H.265.",
+						LOGGER.warn("Renderer \"{}\" selects MPEG-2 for 3D output {}. MPEG-2 requires the output layout in frame Stereo3D side data to write its JP3D user data mark. The current FFmpeg stereo3d filter does not write that output layout; use H.264 or H.265 for automatic 3D switching until it does.",
 							renderer.getRendererName(), renderer.getOutput3DFormat());
 					} else if ((encodingFormat.isTranscodeToH264() || encodingFormat.isTranscodeToH265()) &&
 						!customFFmpegOptions.contains("-c:v") && !customFFmpegOptions.contains("-bsf")) {

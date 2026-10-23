@@ -151,7 +151,11 @@ class StereoOutputDeclarationTest {
 		try {
 			List<String> options = options("MPEGPS-MPEG2-AC3", Mode3D.SBS2L, "libx264");
 			assertEquals("mpeg2video", options.get(options.indexOf("-c:v") + 1));
-			assertTrue(appender.list.stream().anyMatch(event -> event.getFormattedMessage().contains("MPEG-2 cannot carry the frame packing SEI")));
+			String warning = appender.list.stream().map(event -> event.getFormattedMessage())
+				.filter(message -> message.contains("selects MPEG-2")).findFirst().orElseThrow();
+			assertTrue(warning.contains("JP3D user data mark"));
+			assertTrue(warning.contains("stereo3d filter does not write that output layout"));
+			assertTrue(warning.contains("use H.264 or H.265 for automatic 3D switching"));
 		} finally {
 			logger.detachAppender(appender);
 			logger.setLevel(previous);
