@@ -131,7 +131,12 @@ public class FFMpegVideo extends Engine {
 		MediaVideo defaultVideoTrack = mediaInfo != null ? mediaInfo.getDefaultVideoTrack() : null;
 
 		boolean isMediaValid = mediaInfo != null && mediaInfo.isMediaParsed() && defaultVideoTrack != null && defaultVideoTrack.getHeight() != 0;
-		boolean isResolutionTooHighForRenderer = isMediaValid && defaultVideoTrack != null && !renderer.isResolutionCompatibleWithRenderer(defaultVideoTrack.getWidth(), defaultVideoTrack.getHeight());
+		MediaVideo.Mode3D input3D = defaultVideoTrack != null ? defaultVideoTrack.get3DLayout() : null;
+		String output3D = renderer.getOutput3DFormat();
+		boolean convert3D = input3D != null && !defaultVideoTrack.multiViewIsAnaglyph() && StringUtils.isNotBlank(output3D) &&
+			!input3D.name().equalsIgnoreCase(output3D);
+		Stereo3DGeometry.Size outputSize = convert3D ? Stereo3DGeometry.outputSize(resource, mediaInfo,
+			MediaVideo.Mode3D.valueOf(output3D.toUpperCase(Locale.ROOT))) : null;
 
 		int scaleWidth = 0;
 		int scaleHeight = 0;
@@ -140,17 +145,24 @@ public class FFMpegVideo extends Engine {
 			scaleHeight = defaultVideoTrack.getHeight();
 		}
 
+		if (outputSize != null) {
+			scaleWidth = outputSize.width();
+			scaleHeight = outputSize.height();
+		}
+		boolean isResolutionTooHighForRenderer = isMediaValid && !renderer.isResolutionCompatibleWithRenderer(scaleWidth, scaleHeight);
+
 		boolean is3D = (defaultVideoTrack != null && defaultVideoTrack.is3d() && !defaultVideoTrack.multiViewIsAnaglyph()) || isConvertedTo3d;
 
 		// Make sure the aspect ratio is 16/9 if the renderer needs it.
 		boolean keepAR = (renderer.isKeepAspectRatio() || renderer.isKeepAspectRatioTranscoding()) &&
-				(defaultVideoTrack != null && !defaultVideoTrack.is3dFullSbsOrOu()) && !isConvertedTo3d &&
+				(convert3D ? !output3D.equals("sbsl") && !output3D.equals("sbsr") && !output3D.equals("abl") && !output3D.equals("abr") :
+				defaultVideoTrack != null && !defaultVideoTrack.is3dFullSbsOrOu()) && !isConvertedTo3d &&
 				(!"16:9".equals(defaultVideoTrack.getDisplayAspectRatio()));
 
 		// Scale and pad the video if necessary
 		ArrayList<String> scalePadFilterChain = new ArrayList<>();
-		if (isResolutionTooHighForRenderer || (!renderer.isRescaleByRenderer() && renderer.isMaximumResolutionSpecified() && mediaInfo.getWidth() < 720)) { // Do not rescale for SD video and higher
-			if (defaultVideoTrack != null && defaultVideoTrack.is3dFullSbsOrOu()) {
+		if (isResolutionTooHighForRenderer || (!renderer.isRescaleByRenderer() && renderer.isMaximumResolutionSpecified() && scaleWidth < 720)) { // Do not rescale for SD video and higher
+			if (!convert3D && defaultVideoTrack != null && defaultVideoTrack.is3dFullSbsOrOu()) {
 				scalePadFilterChain.add(String.format("scale=%1$d:%2$d", renderer.getMaxVideoWidth(), renderer.getMaxVideoHeight()));
 			} else {
 				scalePadFilterChain.add(String.format("scale=iw*min(%1$d/iw\\,%2$d/ih):ih*min(%1$d/iw\\,%2$d/ih)", renderer.getMaxVideoWidth(), renderer.getMaxVideoHeight()));
@@ -161,7 +173,7 @@ public class FFMpegVideo extends Engine {
 				}
 			}
 		} else if (keepAR && isMediaValid) {
-			if ((mediaInfo.getWidth() / (double) mediaInfo.getHeight()) >= (16 / (double) 9)) {
+			if ((scaleWidth / (double) scaleHeight) >= (16 / (double) 9)) {
 				scalePadFilterChain.add("pad=iw:iw/(16/9):0:(oh-ih)/2");
 				scaleHeight = (int) Math.round(scaleWidth / (16 / (double) 9));
 			} else {
@@ -183,7 +195,9 @@ public class FFMpegVideo extends Engine {
 
 			scalePadFilterChain.add("scale=" + scaleWidth + ":" + scaleHeight);
 		}
-		filterChain.addAll(scalePadFilterChain);
+		if (!convert3D) {
+			filterChain.addAll(scalePadFilterChain);
+		}
 
 		boolean override = true;
 		if (renderer instanceof OutputOverride or) {
@@ -298,21 +312,16 @@ public class FFMpegVideo extends Engine {
 			filterChain.add(overrideVF);
 		}
 
-		// Convert 3D video to the other output 3D format or to 2D using "Output3DFormat = ml" or "Output3DFormat = mr" in the renderer conf
-		String stereoLayout = null;
-		String renderer3DOutputFormat = null;
-		if (defaultVideoTrack != null && defaultVideoTrack.get3DLayout() != null) {
-			stereoLayout = defaultVideoTrack.get3DLayout().toString().toLowerCase(Locale.ROOT);
-			renderer3DOutputFormat = renderer.getOutput3DFormat();
-		}
-
-		if (
-			is3D &&
-			stereoLayout != null &&
-			StringUtils.isNotBlank(renderer3DOutputFormat) &&
-			!stereoLayout.equals(renderer3DOutputFormat)
-		) {
-			filterChain.add("stereo3d=" + stereoLayout + ":" + renderer3DOutputFormat);
+		if (convert3D) {
+			filterChain.add("stereo3d=" + input3D.name().toLowerCase(Locale.ROOT) + ":" + output3D);
+			// stereo3d repacks samples and changes SAR; it does not resample to
+			// the display raster a network renderer needs for the chosen format.
+			filterChain.add("scale=" + outputSize.width() + ":" + outputSize.height());
+			filterChain.add("setsar=1");
+			filterChain.addAll(scalePadFilterChain);
+			if (!scalePadFilterChain.isEmpty()) {
+				filterChain.add("setsar=1");
+			}
 		}
 
 		if (!filterChain.isEmpty()) {
