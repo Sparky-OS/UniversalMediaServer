@@ -436,6 +436,9 @@ public class MEncoderVideo extends Engine {
 
 		MediaVideo defaultVideoTrack = media.getDefaultVideoTrack();
 
+		String stereoFilters = MEncoderStereoOptions.filters(item, media, renderer);
+		boolean convertStereo = stereoFilters != null;
+
 		String externalSubtitlesFileName = null;
 
 		if (params.getSid() != null && params.getSid().isExternal()) {
@@ -451,6 +454,20 @@ public class MEncoderVideo extends Engine {
 			} else {
 				LOGGER.error("External subtitles file \"{}\" is unavailable", params.getSid().getName());
 			}
+		}
+
+		File stereoSubtitles = null;
+		if (convertStereo && !isDisableSubtitles(params) &&
+			(!params.getSid().isExternal() || !renderer.streamSubsForTranscodedVideo() ||
+				!renderer.isExternalSubtitlesFormatSupported(params.getSid(), item))) {
+			if (!params.getSid().getType().isText() || !configuration.isMencoderAss()) {
+				throw new IOException("MEncoder stereo conversion needs ASS text composition before repacking; preserve a separate subtitle track or select FFmpeg for bitmap subtitles");
+			}
+			stereoSubtitles = SubtitleUtils.getSubtitles(item, media, params, configuration, SubtitleType.ASS);
+			if (stereoSubtitles == null) {
+				throw new IOException("Unable to prepare per-eye MEncoder subtitles in the UMS subtitle cache");
+			}
+			stereoFilters = MEncoderStereoOptions.withSubtitles(stereoFilters);
 		}
 
 		InputFile newInput = new InputFile();
@@ -483,7 +500,10 @@ public class MEncoderVideo extends Engine {
 		// Decide whether to defer to tsMuxeR or continue to use MEncoder
 		boolean deferToTsmuxer = true;
 		String prependTraceReason = "Not muxing the video stream with tsMuxeR via MEncoder because ";
-		if (!configuration.isMencoderMuxWhenCompatible()) {
+		if (convertStereo) {
+			deferToTsmuxer = false;
+			LOGGER.trace(prependTraceReason + "the renderer requests stereo conversion.");
+		} else if (!configuration.isMencoderMuxWhenCompatible()) {
 			deferToTsmuxer = false;
 			LOGGER.trace(prependTraceReason + "the user setting is disabled");
 		} else if (item.isInsideTranscodeFolder()) {
@@ -978,7 +998,8 @@ public class MEncoderVideo extends Engine {
 				encodeSettings = "-lavcopts " + aspectRatioLavcopts + acodec + abitrate +
 					":threads=" + configuration.getMencoderMaxThreads();
 
-				encodeSettings += " -x264encopts crf=" + x264CRF + ":preset=superfast:level=31:threads=auto";
+				encodeSettings += " -x264encopts crf=" + x264CRF + ":preset=superfast" +
+					(defaultVideoTrack.is3d() ? ":threads=" + configuration.getMencoderMaxThreads() : ":level=31:threads=auto");
 
 				encodeSettings = addMaximumBitrateConstraints(encodeOptions, encodeSettings, media, "", renderer, audioType, encodingFormat);
 			}
@@ -1030,9 +1051,9 @@ public class MEncoderVideo extends Engine {
 				sb.append("-ass ");
 
 				// GUI: Override ASS subtitles style if requested (always for SRT and TX3G subtitles)
-				boolean overrideAssStyle = !configuration.isUseEmbeddedSubtitlesStyle() ||
+				boolean overrideAssStyle = stereoSubtitles == null && (!configuration.isUseEmbeddedSubtitlesStyle() ||
 					params.getSid().getType() == SubtitleType.SUBRIP ||
-					params.getSid().getType() == SubtitleType.TX3G;
+					params.getSid().getType() == SubtitleType.TX3G);
 
 				if (overrideAssStyle) {
 					String assSubColor = configuration.getSubsColor().getMEncoderHexValue();
@@ -1084,7 +1105,7 @@ public class MEncoderVideo extends Engine {
 					subtitleMargin += userMargin;
 
 					sb.append(",MarginV=").append(subtitleMargin).append(' ');
-				} else if (intOCH > 0) {
+				} else if (intOCH > 0 && stereoSubtitles == null) {
 					/*
 					 * Add to the subtitle margin
 					 * This keeps the subtitle text inside the frame instead of in the border
@@ -1215,8 +1236,9 @@ public class MEncoderVideo extends Engine {
 			cmdList.add("-dvd-device");
 		}
 
-		String frameRateRatio = getValidFps(media.getFrameRate(), true);
-		String frameRateNumber = getValidFps(media.getFrameRate(), false);
+		Double sourceFrameRate = defaultVideoTrack.is3d() && defaultVideoTrack.getFrameRate() != null ? defaultVideoTrack.getFrameRate() : media.getFrameRate();
+		String frameRateRatio = getValidFps(sourceFrameRate, true);
+		String frameRateNumber = getValidFps(sourceFrameRate, false);
 
 		// Input filename
 		if (avisynth && !filename.toLowerCase().endsWith(".iso")) {
@@ -1268,7 +1290,9 @@ public class MEncoderVideo extends Engine {
 			cmdList.add("-noautosub");
 		} else {
 			// Note: isEmbedded() and isExternal() are mutually exclusive
-			if (params.getSid().isEmbedded()) { // internal (embedded) subs
+			if (stereoSubtitles != null) {
+				cmdList.addAll(List.of("-nosub", "-noautosub", "-sub", stereoSubtitles.getAbsolutePath().replace(",", "\\,"), "-utf8"));
+			} else if (params.getSid().isEmbedded()) { // internal (embedded) subs
 				// Ensure that external subtitles are not automatically loaded
 				cmdList.add("-noautosub");
 
@@ -1296,7 +1320,7 @@ public class MEncoderVideo extends Engine {
 					if (defaultVideoTrack.is3d()) {
 						if (convertedSubs != null && convertedSubs.getConvertedFile() != null) { // subs are already converted to 3D so use them
 							cmdList.add(convertedSubs.getConvertedFile().getAbsolutePath().replace(",", "\\,"));
-						} else if (params.getSid().getType() != SubtitleType.ASS) { // When subs are not converted and they are not in the ASS format and video is 3D then subs need conversion to 3D
+						} else { // Convert all text formats, including an external ASS source, in the UMS cache
 							File subsFilename = SubtitleUtils.getSubtitles(item, media, params, configuration, SubtitleType.ASS);
 							cmdList.add(subsFilename.getAbsolutePath().replace(",", "\\,"));
 						}
@@ -1345,250 +1369,252 @@ public class MEncoderVideo extends Engine {
 			cmdList.add("10000");
 		}
 
-		boolean deinterlace = configuration.isMencoderYadif();
+		if (!convertStereo) {
+			boolean deinterlace = configuration.isMencoderYadif();
 
-		// Check if the media renderer supports this resolution
-		boolean isResolutionTooHighForRenderer = !renderer.isResolutionCompatibleWithRenderer(defaultVideoTrack.getWidth(), defaultVideoTrack.getHeight());
+			// Check if the media renderer supports this resolution
+			boolean isResolutionTooHighForRenderer = !renderer.isResolutionCompatibleWithRenderer(defaultVideoTrack.getWidth(), defaultVideoTrack.getHeight());
 
-		// Video scaler and overscan compensation
-		boolean scaleBool = false;
-		if (
-			isResolutionTooHighForRenderer ||
-			(
-				configuration.isMencoderScaler() &&
+			// Video scaler and overscan compensation
+			boolean scaleBool = false;
+			if (
+				isResolutionTooHighForRenderer ||
 				(
-					configuration.getMencoderScaleX() != 0 ||
-					configuration.getMencoderScaleY() != 0
-				)
-			) ||
-			(
-				intOCW > 0 ||
-				intOCH > 0
-			)
-		) {
-			scaleBool = true;
-		}
-
-		int scaleWidth = 0;
-		int scaleHeight = 0;
-		String vfValue = "";
-		if (defaultVideoTrack.getWidth() > 0 && defaultVideoTrack.getHeight() > 0) {
-			scaleWidth = defaultVideoTrack.getWidth();
-			scaleHeight = defaultVideoTrack.getHeight();
-		}
-
-		double videoAspectRatio = (double) defaultVideoTrack.getWidth() / (double) defaultVideoTrack.getHeight();
-		double rendererAspectRatio = 1.777777777777778;
-		if (renderer.isMaximumResolutionSpecified()) {
-			rendererAspectRatio = (double) renderer.getMaxVideoWidth() / (double) renderer.getMaxVideoHeight();
-		}
-
-		if ((deinterlace || scaleBool) && !isAviSynthEngine()) {
-			StringBuilder vfValueOverscanPrepend = new StringBuilder();
-			StringBuilder vfValueOverscanMiddle  = new StringBuilder();
-			StringBuilder vfValueVS              = new StringBuilder();
-			StringBuilder vfValueComplete        = new StringBuilder();
-
-			String deinterlaceComma = "";
-
-			/*
-			 * Implement overscan compensation settings
-			 *
-			 * This feature takes into account aspect ratio,
-			 * making it less blunt than the Video Scaler option
-			 */
-			if (intOCW > 0 || intOCH > 0) {
-				int intOCWPixels = (defaultVideoTrack.getWidth()  / 100) * intOCW;
-				int intOCHPixels = (defaultVideoTrack.getHeight() / 100) * intOCH;
-
-				scaleWidth  += intOCWPixels;
-				scaleHeight += intOCHPixels;
-
-				// See if the video needs to be scaled down
-				if (
-					renderer.isMaximumResolutionSpecified() &&
+					configuration.isMencoderScaler() &&
 					(
-						(scaleWidth > renderer.getMaxVideoWidth()) ||
-						(scaleHeight > renderer.getMaxVideoHeight())
+						configuration.getMencoderScaleX() != 0 ||
+						configuration.getMencoderScaleY() != 0
 					)
-				) {
-					double overscannedAspectRatio = scaleWidth / (double) scaleHeight;
-
-					if (overscannedAspectRatio > rendererAspectRatio) {
-						// Limit video by width
-						scaleWidth  = renderer.getMaxVideoWidth();
-						scaleHeight = (int) Math.round(renderer.getMaxVideoWidth() / overscannedAspectRatio);
-					} else {
-						// Limit video by height
-						scaleWidth  = (int) Math.round(renderer.getMaxVideoHeight() * overscannedAspectRatio);
-						scaleHeight = renderer.getMaxVideoHeight();
-					}
-				}
-
-				scaleWidth  = convertToModX(scaleWidth, 4);
-				scaleHeight = convertToModX(scaleHeight, 4);
-
-				vfValueOverscanPrepend.append("softskip,expand=-").append(intOCWPixels).append(":-").append(intOCHPixels);
-				vfValueOverscanMiddle.append(",scale=").append(scaleWidth).append(':').append(scaleHeight);
-			}
-
-			/*
-			 * Video Scaler and renderer-specific resolution-limiter
-			 */
-			if (configuration.isMencoderScaler()) {
-				// Use the manual, user-controlled scaler
-				if (configuration.getMencoderScaleX() != 0) {
-					if (configuration.getMencoderScaleX() <= renderer.getMaxVideoWidth()) {
-						scaleWidth = configuration.getMencoderScaleX();
-					} else {
-						scaleWidth = renderer.getMaxVideoWidth();
-					}
-				}
-
-				if (configuration.getMencoderScaleY() != 0) {
-					if (configuration.getMencoderScaleY() <= renderer.getMaxVideoHeight()) {
-						scaleHeight = configuration.getMencoderScaleY();
-					} else {
-						scaleHeight = renderer.getMaxVideoHeight();
-					}
-				}
-
-				scaleWidth  = convertToModX(scaleWidth, 4);
-				scaleHeight = convertToModX(scaleHeight, 4);
-
-				LOGGER.info("Setting video resolution to: " + scaleWidth + "x" + scaleHeight + ", your Video Scaler setting");
-
-				vfValueVS.append("scale=").append(scaleWidth).append(':').append(scaleHeight);
-			} else if (isResolutionTooHighForRenderer) {
-				// The video resolution is too big for the renderer so we need to scale it down
-
-				/*
-				 * First we deal with some exceptions, then if they are not matched we will
-				 * let the renderer limits work.
-				 *
-				 * This is so, for example, we can still define a maximum resolution of
-				 * 1920x1080 in the renderer encodeOptions file but still support 1920x1088 when
-				 * it's needed, otherwise we would either resize 1088 to 1080, meaning the
-				 * ugly (unused) bottom 8 pixels would be displayed, or we would limit all
-				 * videos to 1088 causing the bottom 8 meaningful pixels to be cut off.
-				 */
-				if (defaultVideoTrack.getWidth() == 3840 && defaultVideoTrack.getHeight() <= 1080) {
-					// Full-SBS
-					scaleWidth  = 1920;
-					scaleHeight = defaultVideoTrack.getHeight();
-				} else if (defaultVideoTrack.getWidth() == 1920 && defaultVideoTrack.getHeight() == 2160) {
-					// Full-OU
-					scaleWidth  = 1920;
-					scaleHeight = 1080;
-				} else if (defaultVideoTrack.getWidth() == 1920 && defaultVideoTrack.getHeight() == 1088) {
-					// SAT capture
-					scaleWidth  = 1920;
-					scaleHeight = 1088;
-				} else {
-					// Passed the exceptions, now we allow the renderer to define the limits
-					if (videoAspectRatio > rendererAspectRatio) {
-						scaleWidth  = renderer.getMaxVideoWidth();
-						scaleHeight = (int) Math.round(renderer.getMaxVideoWidth() / videoAspectRatio);
-					} else {
-						scaleWidth  = (int) Math.round(renderer.getMaxVideoHeight() * videoAspectRatio);
-						scaleHeight = renderer.getMaxVideoHeight();
-					}
-				}
-
-				scaleWidth  = convertToModX(scaleWidth, 4);
-				scaleHeight = convertToModX(scaleHeight, 4);
-
-				LOGGER.info("Setting video resolution to: " + scaleWidth + "x" + scaleHeight + ", the maximum your renderer supports");
-
-				vfValueVS.append("scale=").append(scaleWidth).append(':').append(scaleHeight);
-			}
-
-			// Put the string together taking into account overscan compensation and video scaler
-			if (intOCW > 0 || intOCH > 0) {
-				vfValueComplete.append(vfValueOverscanPrepend).append(vfValueOverscanMiddle).append(",harddup");
-				LOGGER.info("Setting video resolution to: " + scaleWidth + "x" + scaleHeight + ", to fit your overscan compensation");
-			} else {
-				vfValueComplete.append(vfValueVS);
-			}
-
-			if (deinterlace) {
-				deinterlaceComma = ",";
-			}
-
-			vfValue = (deinterlace ? "yadif" : "") + (scaleBool ? deinterlaceComma + vfValueComplete : "");
-		}
-
-		/*
-		 * Make sure the video is mod4 unless the renderer has specified
-		 * that it doesn't care, and make sure the aspect ratio is 16/9
-		 * if the renderer needs it.
-		 *
-		 * The PS3 and possibly other renderers sometimes display mod2
-		 * videos in black and white with diagonal strips of color.
-		 *
-		 * TODO: Integrate this with the other stuff so that "expand" only
-		 * ever appears once in the MEncoder CMD.
-		 */
-		if (
-			!isDVD &&
-			(
-				(
-					(
-						(scaleWidth % 4 != 0) ||
-						(scaleHeight % 4 != 0)
-					) &&
-					!renderer.isMuxNonMod4Resolution()
 				) ||
 				(
-					(
-						renderer.isKeepAspectRatio() ||
-						renderer.isKeepAspectRatioTranscoding()
-					) &&
-					!"16:9".equals(defaultVideoTrack.getDisplayAspectRatio())
+					intOCW > 0 ||
+					intOCH > 0
 				)
-			) &&
-			!configuration.isMencoderScaler()
-		) {
-			String vfValuePrepend = "expand=";
-
-			if (renderer.isKeepAspectRatio() || renderer.isKeepAspectRatioTranscoding()) {
-				String resolution = item.getResolutionForKeepAR(scaleWidth, scaleHeight);
-				scaleWidth = Integer.parseInt(StringUtils.substringBefore(resolution, "x"));
-				scaleHeight = Integer.parseInt(StringUtils.substringAfter(resolution, "x"));
-
-				/**
-				 * Now we know which resolution we want the video to be, let's see if MEncoder
-				 * can be trusted to output it using only the expand filter, or if we need to
-				 * be extra careful and use scale too (which is slower).
-				 *
-				 * For now I'm not sure exactly how MEncoder decides which resolution to
-				 * output so this is some cautious math. If someone does extensive testing
-				 * in the future it can be made less cautious.
-				 */
-				if (
-					(scaleWidth + 4) > renderer.getMaxVideoWidth() ||
-					(scaleHeight + 4) > renderer.getMaxVideoHeight()
-				) {
-					vfValuePrepend += "::::0:16/9,scale=" + scaleWidth + ":" + scaleHeight;
-				} else {
-					vfValuePrepend += "::::0:16/9:4";
-				}
-			} else {
-				vfValuePrepend += "-" + (scaleWidth % 4) + ":-" + (scaleHeight % 4);
+			) {
+				scaleBool = true;
 			}
 
-			vfValuePrepend += ",softskip";
+			int scaleWidth = 0;
+			int scaleHeight = 0;
+			String vfValue = "";
+			if (defaultVideoTrack.getWidth() > 0 && defaultVideoTrack.getHeight() > 0) {
+				scaleWidth = defaultVideoTrack.getWidth();
+				scaleHeight = defaultVideoTrack.getHeight();
+			}
+
+			double videoAspectRatio = (double) defaultVideoTrack.getWidth() / (double) defaultVideoTrack.getHeight();
+			double rendererAspectRatio = 1.777777777777778;
+			if (renderer.isMaximumResolutionSpecified()) {
+				rendererAspectRatio = (double) renderer.getMaxVideoWidth() / (double) renderer.getMaxVideoHeight();
+			}
+
+			if ((deinterlace || scaleBool) && !isAviSynthEngine()) {
+				StringBuilder vfValueOverscanPrepend = new StringBuilder();
+				StringBuilder vfValueOverscanMiddle  = new StringBuilder();
+				StringBuilder vfValueVS              = new StringBuilder();
+				StringBuilder vfValueComplete        = new StringBuilder();
+
+				String deinterlaceComma = "";
+
+				/*
+				 * Implement overscan compensation settings
+				 *
+				 * This feature takes into account aspect ratio,
+				 * making it less blunt than the Video Scaler option
+				 */
+				if (intOCW > 0 || intOCH > 0) {
+					int intOCWPixels = (defaultVideoTrack.getWidth()  / 100) * intOCW;
+					int intOCHPixels = (defaultVideoTrack.getHeight() / 100) * intOCH;
+
+					scaleWidth  += intOCWPixels;
+					scaleHeight += intOCHPixels;
+
+					// See if the video needs to be scaled down
+					if (
+						renderer.isMaximumResolutionSpecified() &&
+						(
+							(scaleWidth > renderer.getMaxVideoWidth()) ||
+							(scaleHeight > renderer.getMaxVideoHeight())
+						)
+					) {
+						double overscannedAspectRatio = scaleWidth / (double) scaleHeight;
+
+						if (overscannedAspectRatio > rendererAspectRatio) {
+							// Limit video by width
+							scaleWidth  = renderer.getMaxVideoWidth();
+							scaleHeight = (int) Math.round(renderer.getMaxVideoWidth() / overscannedAspectRatio);
+						} else {
+							// Limit video by height
+							scaleWidth  = (int) Math.round(renderer.getMaxVideoHeight() * overscannedAspectRatio);
+							scaleHeight = renderer.getMaxVideoHeight();
+						}
+					}
+
+					scaleWidth  = convertToModX(scaleWidth, 4);
+					scaleHeight = convertToModX(scaleHeight, 4);
+
+					vfValueOverscanPrepend.append("softskip,expand=-").append(intOCWPixels).append(":-").append(intOCHPixels);
+					vfValueOverscanMiddle.append(",scale=").append(scaleWidth).append(':').append(scaleHeight);
+				}
+
+				/*
+				 * Video Scaler and renderer-specific resolution-limiter
+				 */
+				if (configuration.isMencoderScaler()) {
+					// Use the manual, user-controlled scaler
+					if (configuration.getMencoderScaleX() != 0) {
+						if (configuration.getMencoderScaleX() <= renderer.getMaxVideoWidth()) {
+							scaleWidth = configuration.getMencoderScaleX();
+						} else {
+							scaleWidth = renderer.getMaxVideoWidth();
+						}
+					}
+
+					if (configuration.getMencoderScaleY() != 0) {
+						if (configuration.getMencoderScaleY() <= renderer.getMaxVideoHeight()) {
+							scaleHeight = configuration.getMencoderScaleY();
+						} else {
+							scaleHeight = renderer.getMaxVideoHeight();
+						}
+					}
+
+					scaleWidth  = convertToModX(scaleWidth, 4);
+					scaleHeight = convertToModX(scaleHeight, 4);
+
+					LOGGER.info("Setting video resolution to: " + scaleWidth + "x" + scaleHeight + ", your Video Scaler setting");
+
+					vfValueVS.append("scale=").append(scaleWidth).append(':').append(scaleHeight);
+				} else if (isResolutionTooHighForRenderer) {
+					// The video resolution is too big for the renderer so we need to scale it down
+
+					/*
+					 * First we deal with some exceptions, then if they are not matched we will
+					 * let the renderer limits work.
+					 *
+					 * This is so, for example, we can still define a maximum resolution of
+					 * 1920x1080 in the renderer encodeOptions file but still support 1920x1088 when
+					 * it's needed, otherwise we would either resize 1088 to 1080, meaning the
+					 * ugly (unused) bottom 8 pixels would be displayed, or we would limit all
+					 * videos to 1088 causing the bottom 8 meaningful pixels to be cut off.
+					 */
+					if (defaultVideoTrack.getWidth() == 3840 && defaultVideoTrack.getHeight() <= 1080) {
+						// Full-SBS
+						scaleWidth  = 1920;
+						scaleHeight = defaultVideoTrack.getHeight();
+					} else if (defaultVideoTrack.getWidth() == 1920 && defaultVideoTrack.getHeight() == 2160) {
+						// Full-OU
+						scaleWidth  = 1920;
+						scaleHeight = 1080;
+					} else if (defaultVideoTrack.getWidth() == 1920 && defaultVideoTrack.getHeight() == 1088) {
+						// SAT capture
+						scaleWidth  = 1920;
+						scaleHeight = 1088;
+					} else {
+						// Passed the exceptions, now we allow the renderer to define the limits
+						if (videoAspectRatio > rendererAspectRatio) {
+							scaleWidth  = renderer.getMaxVideoWidth();
+							scaleHeight = (int) Math.round(renderer.getMaxVideoWidth() / videoAspectRatio);
+						} else {
+							scaleWidth  = (int) Math.round(renderer.getMaxVideoHeight() * videoAspectRatio);
+							scaleHeight = renderer.getMaxVideoHeight();
+						}
+					}
+
+					scaleWidth  = convertToModX(scaleWidth, 4);
+					scaleHeight = convertToModX(scaleHeight, 4);
+
+					LOGGER.info("Setting video resolution to: " + scaleWidth + "x" + scaleHeight + ", the maximum your renderer supports");
+
+					vfValueVS.append("scale=").append(scaleWidth).append(':').append(scaleHeight);
+				}
+
+				// Put the string together taking into account overscan compensation and video scaler
+				if (intOCW > 0 || intOCH > 0) {
+					vfValueComplete.append(vfValueOverscanPrepend).append(vfValueOverscanMiddle).append(",harddup");
+					LOGGER.info("Setting video resolution to: " + scaleWidth + "x" + scaleHeight + ", to fit your overscan compensation");
+				} else {
+					vfValueComplete.append(vfValueVS);
+				}
+
+				if (deinterlace) {
+					deinterlaceComma = ",";
+				}
+
+				vfValue = (deinterlace ? "yadif" : "") + (scaleBool ? deinterlaceComma + vfValueComplete : "");
+			}
+
+			/*
+			 * Make sure the video is mod4 unless the renderer has specified
+			 * that it doesn't care, and make sure the aspect ratio is 16/9
+			 * if the renderer needs it.
+			 *
+			 * The PS3 and possibly other renderers sometimes display mod2
+			 * videos in black and white with diagonal strips of color.
+			 *
+			 * TODO: Integrate this with the other stuff so that "expand" only
+			 * ever appears once in the MEncoder CMD.
+			 */
+			if (
+				!isDVD &&
+				(
+					(
+						(
+							(scaleWidth % 4 != 0) ||
+							(scaleHeight % 4 != 0)
+						) &&
+						!renderer.isMuxNonMod4Resolution()
+					) ||
+					(
+						(
+							renderer.isKeepAspectRatio() ||
+							renderer.isKeepAspectRatioTranscoding()
+						) &&
+						!"16:9".equals(defaultVideoTrack.getDisplayAspectRatio())
+					)
+				) &&
+				!configuration.isMencoderScaler()
+			) {
+				String vfValuePrepend = "expand=";
+
+				if (renderer.isKeepAspectRatio() || renderer.isKeepAspectRatioTranscoding()) {
+					String resolution = item.getResolutionForKeepAR(scaleWidth, scaleHeight);
+					scaleWidth = Integer.parseInt(StringUtils.substringBefore(resolution, "x"));
+					scaleHeight = Integer.parseInt(StringUtils.substringAfter(resolution, "x"));
+
+					/**
+					 * Now we know which resolution we want the video to be, let's see if MEncoder
+					 * can be trusted to output it using only the expand filter, or if we need to
+					 * be extra careful and use scale too (which is slower).
+					 *
+					 * For now I'm not sure exactly how MEncoder decides which resolution to
+					 * output so this is some cautious math. If someone does extensive testing
+					 * in the future it can be made less cautious.
+					 */
+					if (
+						(scaleWidth + 4) > renderer.getMaxVideoWidth() ||
+						(scaleHeight + 4) > renderer.getMaxVideoHeight()
+					) {
+						vfValuePrepend += "::::0:16/9,scale=" + scaleWidth + ":" + scaleHeight;
+					} else {
+						vfValuePrepend += "::::0:16/9:4";
+					}
+				} else {
+					vfValuePrepend += "-" + (scaleWidth % 4) + ":-" + (scaleHeight % 4);
+				}
+
+				vfValuePrepend += ",softskip";
+
+				if (StringUtils.isNotBlank(vfValue)) {
+					vfValuePrepend += ",";
+				}
+
+				vfValue = vfValuePrepend + vfValue;
+			}
 
 			if (StringUtils.isNotBlank(vfValue)) {
-				vfValuePrepend += ",";
+				cmdList.add("-vf");
+				cmdList.add(vfValue);
 			}
-
-			vfValue = vfValuePrepend + vfValue;
-		}
-
-		if (StringUtils.isNotBlank(vfValue)) {
-			cmdList.add("-vf");
-			cmdList.add(vfValue);
 		}
 
 		if (configuration.getMencoderMT() && !avisynth && !isDVD && !(defaultVideoTrack.getCodec() != null && (defaultVideoTrack.getCodec().startsWith("mpeg2")))) {
@@ -1768,6 +1794,11 @@ public class MEncoderVideo extends Engine {
 				}
 			}
 		}
+
+		if (stereoSubtitles != null && !cmdList.contains("-ass")) {
+			throw new IOException("The selected MEncoder options disable ASS required for per-eye stereo subtitles");
+		}
+		MEncoderStereoOptions.apply(cmdList, stereoFilters, MEncoderStereoOptions.outputLayout(media, renderer), encodingFormat);
 
 		if ((encodeOptions.pcm || encodeOptions.dtsRemux || encodeOptions.encodedAudioPassthrough || encodeOptions.ac3Remux) || (configuration.isMencoderNoOutOfSync() && !disableMc0AndNoskip)) {
 			if (configuration.isFix25FPSAvMismatch()) {

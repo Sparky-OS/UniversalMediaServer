@@ -898,6 +898,16 @@ public class RendererConfiguration extends BaseConfiguration {
 		return getInt(KEY_MAX_VIDEO_WIDTH, 0) > 0 || getInt(KEY_MAX_VIDEO_HEIGHT, 0) > 0;
 	}
 
+	/** Width limit explicitly declared by the renderer, or zero. */
+	public int getConfiguredMaxVideoWidth() {
+		return getInt(KEY_MAX_VIDEO_WIDTH, 0);
+	}
+
+	/** Height limit explicitly declared by the renderer, or zero. */
+	public int getConfiguredMaxVideoHeight() {
+		return getInt(KEY_MAX_VIDEO_HEIGHT, 0);
+	}
+
 	/**
 	 * Returns <code>true</code> if the renderer has a maximum supported width
 	 * and height, <code>false</code> otherwise.
