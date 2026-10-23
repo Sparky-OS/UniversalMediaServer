@@ -105,7 +105,15 @@ class StoreItemTranscodeAdvertisementTest {
 
 	@Test
 	void mainItemAdvertisesOnlyTheSelectedTransportStream() throws Exception {
-		StoreItem item = item(false);
+		verifyAdvertisement(item(false));
+	}
+
+	@Test
+	void stereoConversionAdvertisesTheSelectedTransportStream() throws Exception {
+		verifyAdvertisement(item(true));
+	}
+
+	private void verifyAdvertisement(StoreItem item) throws Exception {
 		item.setTranscodingSettings(item.resolveTranscodingSettings()); // StoreContainer.addChild does this before DIDL generation.
 		assertTrue(item.isTranscoded());
 		var main = StoreResourceHelper.getItem(item, "*");

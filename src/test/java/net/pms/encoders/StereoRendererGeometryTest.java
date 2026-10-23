@@ -242,6 +242,28 @@ class StereoRendererGeometryTest {
 	}
 
 	@Test
+	void fourKHalfPackingKeepsItsRasterWithoutDeclaredLimits() throws Exception {
+		Renderer renderer = new Renderer((String) null) {
+			@Override
+			public String getOutput3DFormat() { return "ab2r"; }
+		};
+		assertEquals(1920, renderer.getMaxVideoWidth()); // The legacy default is not a device declaration.
+		assertFalse(renderer.isMaximumResolutionConfigured());
+		List<String> filters = filters(media(Mode3D.SBS2L, 3840, 2160), renderer);
+		assertEquals("[0:v]stereo3d=sbs2l:ab2r,scale=3840:2160,setsar=1,sidedata=mode=delete:type=STEREO3D", filters.get(1));
+		File converted = new File(tempDir, "four-k-no-limits.nut");
+		String ffmpeg = System.getProperty("ums.test.stereo.ffmpeg", EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO));
+		List<String> cmd = new ArrayList<>(List.of(ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i", "color=red:s=3840x2160:r=1:d=1"));
+		cmd.addAll(filters);
+		cmd.addAll(List.of("-filter_complex_threads", "1", "-frames:v", "1", "-c:v", "ffv1", "-threads", "1", converted.getAbsolutePath()));
+		String log = ProcessUtil.run(cmd.toArray(String[]::new));
+		assertTrue(converted.length() > 0, log);
+		String probe = ProcessUtil.run("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,sample_aspect_ratio", "-of", "default=noprint_wrappers=1", converted.getAbsolutePath());
+		assertTrue(probe.contains("width=3840\n") && probe.contains("height=2160\n") && probe.contains("sample_aspect_ratio=1:1"), probe);
+		System.out.println("FOUR_K_NO_LIMITS " + probe.replace('\n', ' '));
+	}
+
+	@Test
 	void rendererLimitsAreAppliedAfterRepacking() throws Exception {
 		Renderer renderer = new Renderer((String) null) {
 			@Override
@@ -252,6 +274,8 @@ class StereoRendererGeometryTest {
 			public int getMaxVideoHeight() { return 720; }
 			@Override
 			public boolean isMaximumResolutionSpecified() { return true; }
+			@Override
+			public boolean isMaximumResolutionConfigured() { return true; }
 		};
 		String chain = filters(media(Mode3D.AB2L, 1920, 1080), renderer).get(1);
 		assertTrue(chain.startsWith("[0:v]stereo3d=ab2l:sbs2l,scale=1920:1080,setsar=1,scale="), chain);

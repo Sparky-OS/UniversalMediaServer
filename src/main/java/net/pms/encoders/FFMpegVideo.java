@@ -149,7 +149,8 @@ public class FFMpegVideo extends Engine {
 			scaleWidth = outputSize.width();
 			scaleHeight = outputSize.height();
 		}
-		boolean isResolutionTooHighForRenderer = isMediaValid && !renderer.isResolutionCompatibleWithRenderer(scaleWidth, scaleHeight);
+		boolean applyRendererLimits = !convert3D || renderer.isMaximumResolutionConfigured();
+		boolean isResolutionTooHighForRenderer = applyRendererLimits && isMediaValid && !renderer.isResolutionCompatibleWithRenderer(scaleWidth, scaleHeight);
 
 		boolean is3D = (defaultVideoTrack != null && defaultVideoTrack.is3d() && !defaultVideoTrack.multiViewIsAnaglyph()) || isConvertedTo3d;
 
@@ -161,7 +162,7 @@ public class FFMpegVideo extends Engine {
 
 		// Scale and pad the video if necessary
 		ArrayList<String> scalePadFilterChain = new ArrayList<>();
-		if (isResolutionTooHighForRenderer || (!renderer.isRescaleByRenderer() && renderer.isMaximumResolutionSpecified() && scaleWidth < 720)) { // Do not rescale for SD video and higher
+		if (isResolutionTooHighForRenderer || (applyRendererLimits && !renderer.isRescaleByRenderer() && renderer.isMaximumResolutionSpecified() && scaleWidth < 720)) { // Do not rescale for SD video and higher
 			if (!convert3D && defaultVideoTrack != null && defaultVideoTrack.is3dFullSbsOrOu()) {
 				scalePadFilterChain.add(String.format("scale=%1$d:%2$d", renderer.getMaxVideoWidth(), renderer.getMaxVideoHeight()));
 			} else {
@@ -186,8 +187,8 @@ public class FFMpegVideo extends Engine {
 
 			// Make sure we didn't exceed the renderer's maximum resolution.
 			if (
-				scaleHeight > renderer.getMaxVideoHeight() ||
-				scaleWidth  > renderer.getMaxVideoWidth()
+				applyRendererLimits && (scaleHeight > renderer.getMaxVideoHeight() ||
+				scaleWidth  > renderer.getMaxVideoWidth())
 			) {
 				scaleHeight = renderer.getMaxVideoHeight();
 				scaleWidth  = renderer.getMaxVideoWidth();
