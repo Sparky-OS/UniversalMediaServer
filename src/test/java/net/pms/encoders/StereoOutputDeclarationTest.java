@@ -162,7 +162,7 @@ class StereoOutputDeclarationTest {
 		if (writesOutputLayout) {
 			assertTrue(bytes.contains("JP3D\u0003\u0083\u0004\u00ff"), "The JP3D declaration must name output SBS, not input TAB");
 		}
-		String decoded = ProcessUtil.run("ffprobe", "-v", "error", "-show_frames", "-of", "compact", stream.getAbsolutePath());
+		String decoded = ProcessUtil.run(ffmpeg, "-nostdin", "-i", stream.getAbsolutePath(), "-vf", "showinfo", "-frames:v", "1", "-f", "null", "-");
 		assertEquals(writesOutputLayout, decoded.contains("side by side"), decoded);
 		assertFalse(decoded.contains("top and bottom"), decoded);
 		System.out.println("MPEG2_OUTPUT_LAYOUT filter_writes=" + writesOutputLayout + " JP3D=" + bytes.contains("JP3D"));
