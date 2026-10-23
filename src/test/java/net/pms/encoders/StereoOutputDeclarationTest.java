@@ -141,6 +141,34 @@ class StereoOutputDeclarationTest {
 	}
 
 	@Test
+	void mpeg2UsesOnlyTheLayoutWrittenByTheConversionFilter() throws Exception {
+		String ffmpeg = System.getProperty("ums.test.stereo.ffmpeg", EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO));
+		File source = new File(tempDir, "marked-input-tab.mp4");
+		String generated = ProcessUtil.run(ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i", "color=red:s=192x128:r=25:d=1",
+			"-c:v", "libx264", "-x264-params", "frame-packing=4", "-pix_fmt", "yuv420p", "-threads", "1", "-frames:v", "1", source.getAbsolutePath());
+		assertTrue(source.length() > 0, generated);
+		String capability = ProcessUtil.run(ffmpeg, "-nostdin", "-f", "lavfi", "-i", "color=red:s=192x128:r=25:d=1",
+			"-vf", "stereo3d=ab2l:sbs2l,showinfo", "-frames:v", "1", "-f", "null", "-");
+		assertTrue(capability.contains("showinfo"), capability);
+		boolean writesOutputLayout = capability.contains("side by side");
+		File stream = new File(tempDir, "converted-sbs.m2v");
+		List<String> command = new ArrayList<>(List.of(ffmpeg, "-nostdin", "-y", "-i", source.getAbsolutePath()));
+		command.addAll(StereoRendererGeometryTest.filters(StereoRendererGeometryTest.media(Mode3D.AB2L, 192, 128), StereoRendererGeometryTest.renderer(Mode3D.SBS2L)));
+		command.addAll(List.of("-frames:v", "1", "-c:v", "mpeg2video", "-threads", "1", "-f", "mpeg2video", stream.getAbsolutePath()));
+		String log = ProcessUtil.run(command.toArray(String[]::new));
+		assertTrue(stream.length() > 0, log);
+		String bytes = new String(java.nio.file.Files.readAllBytes(stream.toPath()), java.nio.charset.StandardCharsets.ISO_8859_1);
+		assertEquals(writesOutputLayout, bytes.contains("JP3D"), log);
+		if (writesOutputLayout) {
+			assertTrue(bytes.contains("JP3D\u0003\u0083\u0004\u00ff"), "The JP3D declaration must name output SBS, not input TAB");
+		}
+		String decoded = ProcessUtil.run("ffprobe", "-v", "error", "-show_frames", "-of", "compact", stream.getAbsolutePath());
+		assertEquals(writesOutputLayout, decoded.contains("side by side"), decoded);
+		assertFalse(decoded.contains("top and bottom"), decoded);
+		System.out.println("MPEG2_OUTPUT_LAYOUT filter_writes=" + writesOutputLayout + " JP3D=" + bytes.contains("JP3D"));
+	}
+
+	@Test
 	void mpeg2KeepsTheSelectedCodecAndExplainsTheMissingDeclaration() throws Exception {
 		Logger logger = (Logger) LoggerFactory.getLogger(FFMpegVideo.class);
 		Level previous = logger.getLevel();

@@ -314,6 +314,9 @@ public class FFMpegVideo extends Engine {
 		}
 
 		if (convert3D) {
+			// Discard the source declaration before repacking. A stereo3d filter
+			// that writes the output layout must keep it for the encoder.
+			filterChain.add("sidedata=mode=delete:type=STEREO3D");
 			filterChain.add("stereo3d=" + input3D.name().toLowerCase(Locale.ROOT) + ":" + output3D);
 			// stereo3d repacks samples and changes SAR; it does not resample to
 			// the display raster a network renderer needs for the chosen format.
@@ -323,9 +326,6 @@ public class FFMpegVideo extends Engine {
 			if (!scalePadFilterChain.isEmpty()) {
 				filterChain.add("setsar=1");
 			}
-			// x264 reads frame side data too. The source mark must not override
-			// the output declaration, or survive a mono/anaglyph conversion.
-			filterChain.add("sidedata=mode=delete:type=STEREO3D");
 		}
 
 		if (!filterChain.isEmpty()) {

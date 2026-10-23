@@ -114,9 +114,9 @@ class StereoRendererGeometryTest {
 
 	void everyConversionHasItsDisplayRasterAfterRepacking(Mode3D input, Mode3D output) throws Exception {
 		int[] size = outputSize(output, 192, 128);
-		List<String> expected = input == output ? List.of() : List.of("-filter_complex", "[0:v]stereo3d=" +
+		List<String> expected = input == output ? List.of() : List.of("-filter_complex", "[0:v]sidedata=mode=delete:type=STEREO3D,stereo3d=" +
 			input.name().toLowerCase(Locale.ROOT) + ":" + output.name().toLowerCase(Locale.ROOT) +
-			",scale=" + size[0] + ":" + size[1] + ",setsar=1,sidedata=mode=delete:type=STEREO3D");
+			",scale=" + size[0] + ":" + size[1] + ",setsar=1");
 		assertEquals(expected, filters(media(input, 192, 128), renderer(output)));
 	}
 
@@ -211,7 +211,7 @@ class StereoRendererGeometryTest {
 				MediaInfoParser.parse(media, source, Format.VIDEO);
 				List<String> filters = filters(media, renderer(output), source);
 				int[] size = outputSize(output, 1280, 720);
-				assertTrue(filters.get(1).endsWith(",scale=" + size[0] + ":" + size[1] + ",setsar=1,sidedata=mode=delete:type=STEREO3D"), filters.toString());
+				assertTrue(filters.get(1).endsWith(",scale=" + size[0] + ":" + size[1] + ",setsar=1"), filters.toString());
 				File converted = new File(tempDir, "native.nut");
 				Files.deleteIfExists(converted.toPath());
 				String ffmpeg = System.getProperty("ums.test.stereo.ffmpeg", EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO));
@@ -250,7 +250,7 @@ class StereoRendererGeometryTest {
 		assertEquals(1920, renderer.getMaxVideoWidth()); // The legacy default is not a device declaration.
 		assertFalse(renderer.isMaximumResolutionConfigured());
 		List<String> filters = filters(media(Mode3D.SBS2L, 3840, 2160), renderer);
-		assertEquals("[0:v]stereo3d=sbs2l:ab2r,scale=3840:2160,setsar=1,sidedata=mode=delete:type=STEREO3D", filters.get(1));
+		assertEquals("[0:v]sidedata=mode=delete:type=STEREO3D,stereo3d=sbs2l:ab2r,scale=3840:2160,setsar=1", filters.get(1));
 		File converted = new File(tempDir, "four-k-no-limits.nut");
 		String ffmpeg = System.getProperty("ums.test.stereo.ffmpeg", EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO));
 		List<String> cmd = new ArrayList<>(List.of(ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i", "color=red:s=3840x2160:r=1:d=1"));
@@ -278,8 +278,8 @@ class StereoRendererGeometryTest {
 			public boolean isMaximumResolutionConfigured() { return true; }
 		};
 		String chain = filters(media(Mode3D.AB2L, 1920, 1080), renderer).get(1);
-		assertTrue(chain.startsWith("[0:v]stereo3d=ab2l:sbs2l,scale=1920:1080,setsar=1,scale="), chain);
-		assertTrue(chain.endsWith("setsar=1,sidedata=mode=delete:type=STEREO3D"), chain);
+		assertTrue(chain.startsWith("[0:v]sidedata=mode=delete:type=STEREO3D,stereo3d=ab2l:sbs2l,scale=1920:1080,setsar=1,scale="), chain);
+		assertTrue(chain.endsWith("setsar=1"), chain);
 		File converted = new File(tempDir, "limited.nut");
 		String ffmpeg = System.getProperty("ums.test.stereo.ffmpeg", EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO));
 		List<String> cmd = new ArrayList<>(List.of(ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i", "color=red:s=1920x1080:r=1:d=1"));
@@ -305,6 +305,6 @@ class StereoRendererGeometryTest {
 		File source = ParserTest.getTestFile("video-h264_stereomode_side_by_side_left_first.mkv");
 		MediaInfo media = new MediaInfo();
 		MediaInfoParser.parse(media, source, Format.VIDEO);
-		assertEquals(List.of("-filter_complex", "[0:v]stereo3d=sbsl:abl,scale=640:1440,setsar=1,sidedata=mode=delete:type=STEREO3D"), filters(media, renderer(Mode3D.ABL), source));
+		assertEquals(List.of("-filter_complex", "[0:v]sidedata=mode=delete:type=STEREO3D,stereo3d=sbsl:abl,scale=640:1440,setsar=1"), filters(media, renderer(Mode3D.ABL), source));
 	}
 }
