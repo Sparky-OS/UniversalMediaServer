@@ -149,7 +149,7 @@ class StereoOutputDeclarationTest {
 		assertTrue(source.length() > 0, generated);
 		String capability = ProcessUtil.run(ffmpeg, "-nostdin", "-f", "lavfi", "-i", "color=red:s=192x128:r=25:d=1",
 			"-vf", "stereo3d=ab2l:sbs2l,showinfo", "-frames:v", "1", "-f", "null", "-");
-		assertTrue(capability.contains("showinfo"), capability);
+		assertTrue(java.util.regex.Pattern.compile("\\bn:\\s*0\\s+pts:").matcher(capability).find(), capability);
 		boolean writesOutputLayout = capability.contains("side by side");
 		File stream = new File(tempDir, "converted-sbs.m2v");
 		List<String> command = new ArrayList<>(List.of(ffmpeg, "-nostdin", "-y", "-i", source.getAbsolutePath()));
@@ -162,7 +162,7 @@ class StereoOutputDeclarationTest {
 		if (writesOutputLayout) {
 			assertTrue(bytes.contains("JP3D\u0003\u0083\u0004\u00ff"), "The JP3D declaration must name output SBS, not input TAB");
 		}
-		String decoded = ProcessUtil.run("ffprobe", "-v", "error", "-show_frames", "-of", "compact", stream.getAbsolutePath());
+		String decoded = ProcessUtil.run(ffmpeg, "-nostdin", "-i", stream.getAbsolutePath(), "-vf", "showinfo", "-frames:v", "1", "-f", "null", "-");
 		assertEquals(writesOutputLayout, decoded.contains("side by side"), decoded);
 		assertFalse(decoded.contains("top and bottom"), decoded);
 		System.out.println("MPEG2_OUTPUT_LAYOUT filter_writes=" + writesOutputLayout + " JP3D=" + bytes.contains("JP3D"));
