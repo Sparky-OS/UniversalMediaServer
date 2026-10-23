@@ -479,7 +479,11 @@ public class FFMpegVideo extends Engine {
 					if (!customFFmpegOptions.contains("-c:v")) {
 						transcodeOptions.add("-c:v");
 						transcodeOptions.add("copy");
-
+						String framePackingFilter = getFramePackingBitstreamFilter(defaultVideoTrack, getExecutable());
+						if (framePackingFilter != null && !customFFmpegOptions.contains("-bsf")) {
+							transcodeOptions.add("-bsf:v");
+							transcodeOptions.add(framePackingFilter);
+						}
 					}
 				} else if (encodingFormat.isTranscodeToMPEG2() && !dtsRemux) {
 					if (!customFFmpegOptions.contains("-c:v")) {
@@ -533,24 +537,24 @@ public class FFMpegVideo extends Engine {
 					}
 				}
 
-				MediaVideo.Mode3D outputLayout = getOutputLayout(defaultVideoTrack, renderer);
-				if (!canMuxVideoWithFFmpeg && outputLayout != null &&
-					(outputLayout.name().startsWith("SBS") || outputLayout.name().startsWith("AB"))) {
+				if (!canMuxVideoWithFFmpeg && getFramePackingFilterOptions(getOutputLayout(defaultVideoTrack, renderer)) != null) {
 					if (encodingFormat.isTranscodeToMPEG2()) {
 						LOGGER.warn("Renderer \"{}\" selects MPEG-2 for 3D output {}. MPEG-2 requires the output layout in frame Stereo3D side data to write its JP3D user data mark. The current FFmpeg stereo3d filter does not write that output layout; use left-eye-first H.264 with libx264 for automatic 3D switching until it does.",
 							renderer.getRendererName(), renderer.getOutput3DFormat());
 					} else if ((encodingFormat.isTranscodeToH264() || encodingFormat.isTranscodeToH265()) &&
-						!customFFmpegOptions.contains("-c:v")) {
-						String packing = getFramePackingArrangement(defaultVideoTrack, renderer);
-						if (encodingFormat.isTranscodeToH264() &&
-							(selectedTranscodeAccelerationMethod == null || selectedTranscodeAccelerationMethod.startsWith("libx264")) && packing != null) {
-							if (!customFFmpegOptions.contains("-x264-params")) {
-								transcodeOptions.add("-x264-params");
-								transcodeOptions.add("frame-packing=" + packing);
-							}
+						!customFFmpegOptions.contains("-c:v") && !customFFmpegOptions.contains("-bsf")) {
+						String filter = encodingFormat.isTranscodeToH264() ? "h264_metadata" : "hevc_metadata";
+						String packing = getFramePackingBitstreamFilter(getOutputLayout(defaultVideoTrack, renderer), filter, getExecutable());
+						if (packing != null) {
+							transcodeOptions.add("-bsf:v");
+							transcodeOptions.add(packing);
+						} else if (selectedTranscodeAccelerationMethod != null && selectedTranscodeAccelerationMethod.startsWith("libx264") &&
+							!customFFmpegOptions.contains("-x264-params") && getFramePackingArrangement(defaultVideoTrack, renderer) != null) {
+							transcodeOptions.add("-x264-params");
+							transcodeOptions.add("frame-packing=" + getFramePackingArrangement(defaultVideoTrack, renderer));
 						} else {
-							LOGGER.warn("Cannot automatically declare 3D output {} with encoder {}. Stock FFmpeg supports left-eye-first H.264 through libx264; H.265 and right-eye-first output need an encoder with a matching frame packing declaration.",
-								renderer.getOutput3DFormat(), selectedTranscodeAccelerationMethod);
+							LOGGER.warn("FFmpeg cannot declare 3D output {} with encoder {}: the {} frame_packing option is unavailable.",
+								renderer.getOutput3DFormat(), selectedTranscodeAccelerationMethod, filter);
 						}
 					}
 				}
@@ -632,6 +636,49 @@ public class FFMpegVideo extends Engine {
 	}
 
 	/**
+	 * Returns the bitstream filter that writes the frame packing arrangement
+	 * SEI while the video is copied, or {@code null} when the video is not
+	 * frame-packed 3D, is not H.264 or H.265, or FFmpeg cannot write it.
+	 *
+	 * A container-level stereoscopic tag, like Matroska's {@code StereoMode},
+	 * does not survive a remux to MPEG-TS, and the renderers that auto-detect
+	 * 3D read the in-stream SEI (see {@link #getFramePackingArrangement}).
+	 * Copying the video would drop the signal that re-encoding keeps, so the
+	 * message is written by {@code h264_metadata} or {@code hevc_metadata}
+	 * without touching the picture.
+	 *
+	 * @param defaultVideoTrack the video track being copied
+	 * @param ffmpegPath the FFmpeg executable
+	 * @return the value for {@code -bsf:v}, or {@code null}
+	 */
+	// Distribution extension until FFmpeg releases these metadata filter options.
+	static String getFramePackingBitstreamFilter(MediaVideo defaultVideoTrack, String ffmpegPath) {
+		if (defaultVideoTrack == null || !defaultVideoTrack.is3d() || defaultVideoTrack.multiViewIsAnaglyph()) {
+			return null;
+		}
+
+		String filter;
+		if (defaultVideoTrack.isH264()) {
+			filter = "h264_metadata";
+		} else if (defaultVideoTrack.isH265()) {
+			filter = "hevc_metadata";
+		} else {
+			return null;
+		}
+
+		return getFramePackingBitstreamFilter(defaultVideoTrack.get3DLayout(), filter, ffmpegPath);
+	}
+
+	private static String getFramePackingBitstreamFilter(MediaVideo.Mode3D layout, String filter, String ffmpegPath) {
+		String options = getFramePackingFilterOptions(layout);
+		if (options == null || !FFmpegOptions.isFramePackingSupported(ffmpegPath, filter)) {
+			return null;
+		}
+
+		return filter + "=frame_packing=insert:" + options;
+	}
+
+	/**
 	 * Returns the 3D layout a transcode outputs: the one the renderer asked
 	 * for, else the one of the source.
 	 */
@@ -650,6 +697,29 @@ public class FFMpegVideo extends Engine {
 		} catch (IllegalArgumentException e) {
 			return null;
 		}
+	}
+
+	/**
+	 * Returns the {@code h264_metadata} and {@code hevc_metadata} options for
+	 * a 3D layout. The SEI does not tell half from full resolution, so the
+	 * half and full layouts give the same options.
+	 *
+	 * @param layout the 3D layout of the video
+	 * @return the options, or {@code null} for a layout without a frame
+	 *         packing arrangement
+	 */
+	static String getFramePackingFilterOptions(MediaVideo.Mode3D layout) {
+		if (layout == null) {
+			return null;
+		}
+
+		return switch (layout) {
+			case SBSL, SBS2L -> "frame_packing_type=side_by_side:frame_packing_view=left_first";
+			case SBSR, SBS2R -> "frame_packing_type=side_by_side:frame_packing_view=right_first";
+			case ABL, AB2L -> "frame_packing_type=top_bottom:frame_packing_view=left_first";
+			case ABR, AB2R -> "frame_packing_type=top_bottom:frame_packing_view=right_first";
+			default -> null;
+		};
 	}
 
 	/**

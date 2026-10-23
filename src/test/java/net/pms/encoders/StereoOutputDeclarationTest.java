@@ -75,6 +75,24 @@ class StereoOutputDeclarationTest {
 	}
 
 	@Test
+	void hardwareH264AndH265AlsoDeclareBothEyeOrders() throws Exception {
+		for (String codec : List.of("H264", "H265")) {
+			for (Mode3D output : List.of(Mode3D.SBS2L, Mode3D.SBS2R, Mode3D.AB2L, Mode3D.AB2R)) {
+				List<String> options = options("MPEGTS-" + codec + "-AC3", output, codec.equals("H264") ? "h264_nvenc" : "hevc_nvenc");
+				int bsf = options.indexOf("-bsf:v");
+				String ffmpeg = System.getProperty("ums.test.stereo.ffmpeg", EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO));
+				if (!FFmpegOptions.isFramePackingSupported(ffmpeg, codec.equals("H264") ? "h264_metadata" : "hevc_metadata")) {
+					assertEquals(-1, bsf, options.toString());
+					continue;
+				}
+				assertTrue(bsf >= 0, options.toString());
+				assertEquals((codec.equals("H264") ? "h264_metadata" : "hevc_metadata") + "=frame_packing=insert:" +
+					FFMpegVideo.getFramePackingFilterOptions(output), options.get(bsf + 1));
+			}
+		}
+	}
+
+	@Test
 	void monoAndAnaglyphDoNotAcquireStereoDeclarations() throws Exception {
 		for (Mode3D output : List.of(Mode3D.ML, Mode3D.MR, Mode3D.ARCD)) {
 			List<String> options = options("MPEGTS-H264-AC3", output, "libx264");
@@ -110,9 +128,10 @@ class StereoOutputDeclarationTest {
 				assertTrue(headers.contains("nal_unit_type"), headers);
 				String arrangementField = codec.equals("H264") ? "frame_packing_arrangement_type" : "fp_arrangement_type";
 				String interpretationField = codec.equals("H264") ? "content_interpretation_type" : "fp_content_interpretation_type";
-				boolean declared = codec.equals("H264") && (output == Mode3D.SBS2L || output == Mode3D.AB2L);
-				assertEquals(declared, options.contains("-x264-params"), options.toString());
-				assertFalse(options.contains("-bsf:v"), options.toString());
+				boolean packed = output == Mode3D.SBS2L || output == Mode3D.SBS2R || output == Mode3D.AB2L || output == Mode3D.AB2R;
+				boolean metadata = FFmpegOptions.isFramePackingSupported(ffmpeg, codec.equals("H264") ? "h264_metadata" : "hevc_metadata");
+				boolean declared = packed && (metadata || (codec.equals("H264") && (output == Mode3D.SBS2L || output == Mode3D.AB2L)));
+				assertEquals(packed && metadata, options.contains("-bsf:v"), options.toString());
 				if (declared) {
 					assertTrue(java.util.regex.Pattern.compile(arrangementField + ".*= " + (output.name().startsWith("SBS") ? 3 : 4)).matcher(headers).find(), headers);
 					assertTrue(java.util.regex.Pattern.compile(interpretationField + ".*= " + (output.name().endsWith("R") ? 2 : 1)).matcher(headers).find(), headers);

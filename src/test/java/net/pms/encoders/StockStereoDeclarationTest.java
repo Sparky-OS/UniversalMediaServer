@@ -61,7 +61,7 @@ class StockStereoDeclarationTest {
 		item.setMediaInfo(media);
 		FFMpegVideo engine = new FFMpegVideo() {
 			@Override
-			public String getExecutable() { return EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO); }
+			public String getExecutable() { return System.getProperty("ums.test.stock.ffmpeg", EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO)); }
 		};
 		item.setTranscodingSettings(new TranscodingSettings(engine, EncodingFormat.VIDEO.get("MPEGTS-" + codec + "-AC3")));
 		OutputParams params = new OutputParams(config);
