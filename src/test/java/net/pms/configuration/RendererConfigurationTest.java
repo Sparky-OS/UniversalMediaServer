@@ -621,6 +621,31 @@ public class RendererConfigurationTest {
 		);
 	}
 
+	@Test
+	public void flatHeadsetProfileIsRecognizedAndConfiguredForStereo() throws Exception {
+		PMS.setConfiguration(new UmsConfiguration(false));
+		RendererConfigurations.loadRendererConfigurations();
+
+		RendererConfiguration renderer = RendererConfigurations.getRendererConfigurationByUPNPDetails(
+			"{friendlyName=Flat Headset, address=127.0.0.1, udn=uuid:00000000-0000-0000-0000-000000000000, " +
+			"manufacturer=KDE contributors, modelName=Flat Headset, modelDescription=Flat Headset, " +
+			"manufacturerURL=http://example.invalid/, modelURL=http://example.invalid/, FlatHeadset/1.0 Panel/3840x2160}"
+		);
+
+		assertNotNull(renderer, "Flat Headset UPnP details were not recognized");
+		assertEquals("Flat Headset", renderer.getRendererName());
+		assertEquals(3840, renderer.getMaxVideoWidth());
+		assertEquals(2160, renderer.getMaxVideoHeight());
+		assertEquals(2, renderer.getLoadingPriority());
+		assertEquals("sbsl", renderer.getOutput3DFormat());
+
+		testUPNPDetails(
+			"Flat Headset",
+			"manufacturer=kde contributors , modelName=flat headset , modelDescription=flat headset , FlatHeadset/1.0 Panel/1920x1080",
+			"{friendlyName=Flat Headset, manufacturer=KDE contributors, modelName=Flat Headset, FlatHeadset/1.0 Panel/3840x2160}"
+		);
+	}
+
 	/**
 	 * Test recognition with a forced default renderer configured.
 	 * @throws ConfigurationException
