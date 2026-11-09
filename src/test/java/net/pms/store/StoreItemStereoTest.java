@@ -18,6 +18,8 @@ package net.pms.store;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.util.List;
@@ -89,7 +91,10 @@ class StoreItemStereoTest {
 	}
 
 	@Test
-	void unsupportedPackingDoesNotBecomeAConversion() throws Exception {
-		assertNull(item("h265", "Checkboard (left eye first)", "sbsl").resolveTranscodingSettings());
+	void unsupportedPackingFailsVisiblyInsteadOfStreaming() {
+		IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
+			item("h265", "Checkboard (left eye first)", "sbsl").resolveTranscodingSettings();
+		});
+		assertTrue(exception.getMessage().contains("from \"Checkboard (left eye first)\" to \"sbsl\""));
 	}
 }

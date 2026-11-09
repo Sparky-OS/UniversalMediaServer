@@ -507,6 +507,26 @@ public abstract class StoreItem extends StoreResource {
 		resolvedTranscodingSettings = TranscodingSettings.getBestTranscodingSettings(this);
 
 		boolean isIncompatible = false;
+		MediaVideo defaultVideoTrack = mediaInfo.getDefaultVideoTrack();
+		String source3DLayout = null;
+		MediaVideo.Mode3D source3DMode = null;
+		if (defaultVideoTrack != null && defaultVideoTrack.is3d()) {
+			source3DMode = defaultVideoTrack.get3DLayout();
+			source3DLayout = source3DMode != null ?
+				source3DMode.toString().toLowerCase(Locale.ROOT) :
+				defaultVideoTrack.getMultiViewLayout();
+		}
+		if (
+			source3DMode == null &&
+			source3DLayout != null &&
+			StringUtils.isNotBlank(renderer.getOutput3DFormat()) &&
+			!source3DLayout.equals(renderer.getOutput3DFormat())
+		) {
+			throw new IllegalStateException(
+				"No supported conversion can convert \"" + getName() + "\" from \"" +
+				source3DLayout + "\" to \"" + renderer.getOutput3DFormat() + "\""
+			);
+		}
 		if (resolvedTranscodingSettings != null) {
 			String prependTranscodingReason = "File \"{}\" will not be streamed because ";
 			if (forceTranscode) {
@@ -569,8 +589,8 @@ public abstract class StoreItem extends StoreResource {
 					}
 				}
 
-				if (mediaVideo.get3DLayout() != null && StringUtils.isNotBlank(renderer.getOutput3DFormat()) &&
-						(!mediaVideo.get3DLayout().toString().toLowerCase(Locale.ROOT).equals(renderer.getOutput3DFormat()))) {
+				if (source3DLayout != null && StringUtils.isNotBlank(renderer.getOutput3DFormat()) &&
+						!source3DLayout.equals(renderer.getOutput3DFormat())) {
 					forceTranscode = true;
 					LOGGER.debug(prependTranscodingReason + "it is 3D and is forced to transcode to the format \"{}\"", getName(), renderer.getOutput3DFormat());
 				}
@@ -593,6 +613,16 @@ public abstract class StoreItem extends StoreResource {
 				LOGGER.debug("Final verdict: \"{}\" will be streamed", getName());
 			}
 		} else {
+			if (
+				source3DLayout != null &&
+				StringUtils.isNotBlank(renderer.getOutput3DFormat()) &&
+				!source3DLayout.equals(renderer.getOutput3DFormat())
+			) {
+				throw new IllegalStateException(
+					"No compatible engine can convert \"" + getName() + "\" from \"" +
+					source3DLayout + "\" to \"" + renderer.getOutput3DFormat() + "\""
+				);
+			}
 			LOGGER.debug("Final verdict: \"{}\" will be streamed because no compatible engine was found", getName());
 		}
 		return resolvedTranscodingSettings;
