@@ -613,16 +613,6 @@ public abstract class StoreItem extends StoreResource {
 				LOGGER.debug("Final verdict: \"{}\" will be streamed", getName());
 			}
 		} else {
-			if (
-				source3DLayout != null &&
-				StringUtils.isNotBlank(renderer.getOutput3DFormat()) &&
-				!source3DLayout.equals(renderer.getOutput3DFormat())
-			) {
-				throw new IllegalStateException(
-					"No compatible engine can convert \"" + getName() + "\" from \"" +
-					source3DLayout + "\" to \"" + renderer.getOutput3DFormat() + "\""
-				);
-			}
 			LOGGER.debug("Final verdict: \"{}\" will be streamed because no compatible engine was found", getName());
 		}
 		return resolvedTranscodingSettings;
