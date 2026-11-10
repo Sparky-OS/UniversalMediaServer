@@ -41,7 +41,7 @@ class StoreItemStereoTest {
 		ParserTest.setUpClass();
 	}
 
-	private StoreItem item(String codec, String layout, String output) throws Exception {
+	private StoreItem item(String codec, String layout, String output, boolean streamed) throws Exception {
 		Renderer renderer = new Renderer((String) null) {
 			@Override
 			public boolean isUseMediaInfo() {
@@ -62,6 +62,11 @@ class StoreItemStereoTest {
 			public String getOutput3DFormat() {
 				return output;
 			}
+
+			@Override
+			public String getStreamedExtensions() {
+				return streamed ? "mkv" : null;
+			}
 		};
 		MediaVideo video = new MediaVideo();
 		video.setCodec(codec);
@@ -72,28 +77,38 @@ class StoreItemStereoTest {
 		MediaInfo media = new MediaInfo();
 		media.addVideoTrack(video);
 		StoreItem item = new RealFile(renderer, new File("stereo.mkv"));
-		item.setFormat(new MKV());
+		MKV format = new MKV();
+		assertTrue(format.match("stereo.mkv"));
+		item.setFormat(format);
 		item.setMediaInfo(media);
 		return item;
 	}
 
 	@Test
 	void h264StereoRequiresTheRequestedConversion() throws Exception {
-		assertNotNull(item("h264", "side by side (left eye first)", "abl").resolveTranscodingSettings());
-		assertNotNull(item("h264", "side by side (left eye first)", "ml").resolveTranscodingSettings());
+		assertNotNull(item("h264", "side by side (left eye first)", "abl", false).resolveTranscodingSettings());
+		assertNotNull(item("h264", "side by side (left eye first)", "ml", false).resolveTranscodingSettings());
 	}
 
 	@Test
 	void compatibleAndUnspecifiedStereoAndMonoCanStream() throws Exception {
-		assertNull(item("h264", "side by side (left eye first)", "sbsl").resolveTranscodingSettings());
-		assertNull(item("h264", "side by side (left eye first)", "").resolveTranscodingSettings());
-		assertNull(item("h264", null, "abl").resolveTranscodingSettings());
+		assertNull(item("h264", "side by side (left eye first)", "sbsl", true).resolveTranscodingSettings());
+		assertNull(item("h264", "side by side (left eye first)", "", true).resolveTranscodingSettings());
+		assertNull(item("h264", null, "abl", true).resolveTranscodingSettings());
 	}
 
 	@Test
 	void unsupportedPackingFailsVisiblyInsteadOfStreaming() {
 		IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
-			item("h265", "checkerboard (left eye first)", "sbsl").resolveTranscodingSettings();
+			item("h265", "checkerboard (left eye first)", "sbsl", false).resolveTranscodingSettings();
+		});
+		assertTrue(exception.getMessage().contains("from \"checkerboard (left eye first)\" to \"sbsl\""));
+	}
+
+	@Test
+	void streamedUnsupportedPackingFailsVisiblyInsteadOfStreaming() {
+		IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
+			item("h265", "checkerboard (left eye first)", "sbsl", true).resolveTranscodingSettings();
 		});
 		assertTrue(exception.getMessage().contains("from \"checkerboard (left eye first)\" to \"sbsl\""));
 	}

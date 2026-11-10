@@ -492,20 +492,6 @@ public abstract class StoreItem extends StoreResource {
 		String configurationForceExtensions = renderer.getUmsConfiguration().getForceTranscodeForExtensions();
 		String configurationSkipExtensions = renderer.getUmsConfiguration().getDisableTranscodeForExtensions();
 
-		// Should transcoding be skipped for this format?
-		skipTranscode = format.skip(configurationSkipExtensions, rendererSkipExtensions);
-
-		if (skipTranscode) {
-			LOGGER.debug("Final verdict: \"{}\" will be streamed since it is forced by configuration", getName());
-			return null;
-		}
-
-		// Should transcoding be forced for this format?
-		boolean forceTranscode = format.skip(configurationForceExtensions, rendererForceExtensions);
-
-		// Try to match an engine based on mediaInfo information and format.
-		resolvedTranscodingSettings = TranscodingSettings.getBestTranscodingSettings(this);
-
 		boolean isIncompatible = false;
 		MediaVideo defaultVideoTrack = mediaInfo.getDefaultVideoTrack();
 		String source3DLayout = null;
@@ -527,6 +513,20 @@ public abstract class StoreItem extends StoreResource {
 				source3DLayout + "\" to \"" + renderer.getOutput3DFormat() + "\""
 			);
 		}
+
+		// Should transcoding be skipped for this format?
+		skipTranscode = format.skip(configurationSkipExtensions, rendererSkipExtensions);
+
+		if (skipTranscode) {
+			LOGGER.debug("Final verdict: \"{}\" will be streamed since it is forced by configuration", getName());
+			return null;
+		}
+
+		// Should transcoding be forced for this format?
+		boolean forceTranscode = format.skip(configurationForceExtensions, rendererForceExtensions);
+
+		// Try to match an engine based on mediaInfo information and format.
+		resolvedTranscodingSettings = TranscodingSettings.getBestTranscodingSettings(this);
 		if (resolvedTranscodingSettings != null) {
 			String prependTranscodingReason = "File \"{}\" will not be streamed because ";
 			if (forceTranscode) {
