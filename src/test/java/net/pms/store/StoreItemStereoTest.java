@@ -112,4 +112,12 @@ class StoreItemStereoTest {
 		});
 		assertTrue(exception.getMessage().contains("from \"checkerboard (left eye first)\" to \"sbsl\""));
 	}
+
+	@Test
+	void unsupportedRecognizedAnaglyphPackingFailsVisiblyInsteadOfStreaming() {
+		IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
+			item("h265", "arcc", "sbsl", false).resolveTranscodingSettings();
+		});
+		assertTrue(exception.getMessage().contains("from \"arcc\" to \"sbsl\""));
+	}
 }

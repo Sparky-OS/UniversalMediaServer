@@ -503,7 +503,7 @@ public abstract class StoreItem extends StoreResource {
 				defaultVideoTrack.getMultiViewLayout();
 		}
 		if (
-			source3DMode == null &&
+			(source3DMode == null || !isSupportedStereo3DInput(source3DMode)) &&
 			source3DLayout != null &&
 			StringUtils.isNotBlank(renderer.getOutput3DFormat()) &&
 			!source3DLayout.equals(renderer.getOutput3DFormat())
@@ -616,6 +616,14 @@ public abstract class StoreItem extends StoreResource {
 			LOGGER.debug("Final verdict: \"{}\" will be streamed because no compatible engine was found", getName());
 		}
 		return resolvedTranscodingSettings;
+	}
+
+	private static boolean isSupportedStereo3DInput(MediaVideo.Mode3D source3DMode) {
+		return switch (source3DMode) {
+			case ML, MR, ARCG, ARCH, ARCC, ARCD, AGMG, AGMH, AGMC, AGMD,
+			     AYBG, AYBH, AYBC, AYBD -> false;
+			case SBSL, SBSR, SBS2L, SBS2R, ABL, ABR, AB2L, AB2R -> true;
+		};
 	}
 
 	/**
