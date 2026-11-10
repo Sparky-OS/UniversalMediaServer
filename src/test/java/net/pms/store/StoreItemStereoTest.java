@@ -93,8 +93,8 @@ class StoreItemStereoTest {
 	@Test
 	void unsupportedPackingFailsVisiblyInsteadOfStreaming() {
 		IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
-			item("h265", "Checkboard (left eye first)", "sbsl").resolveTranscodingSettings();
+			item("h265", "checkerboard (left eye first)", "sbsl").resolveTranscodingSettings();
 		});
-		assertTrue(exception.getMessage().contains("from \"Checkboard (left eye first)\" to \"sbsl\""));
+		assertTrue(exception.getMessage().contains("from \"checkerboard (left eye first)\" to \"sbsl\""));
 	}
 }

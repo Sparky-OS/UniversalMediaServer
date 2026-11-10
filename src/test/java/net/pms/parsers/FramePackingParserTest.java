@@ -19,6 +19,7 @@ package net.pms.parsers;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import net.pms.formats.Format;
@@ -100,12 +101,17 @@ class FramePackingParserTest {
 		// FFmpeg 5.1 and older
 		assertEquals("half side by side (left eye first)", FramePackingParser.getMultiViewLayout(showinfo("stereoscopic information: type - side by side"), 1920, 1080));
 		assertEquals("top-bottom (right eye first)", FramePackingParser.getMultiViewLayout(showinfo("stereoscopic information: type - top and bottom (inverted)"), 1920, 2160));
-		assertNull(FramePackingParser.getMultiViewLayout(showinfo("stereoscopic information: type - checkerboard"), 1920, 1080));
+		assertEquals("checkerboard (left eye first)", FramePackingParser.getMultiViewLayout(showinfo("stereoscopic information: type - checkerboard"), 1920, 1080));
 	}
 
 	@Test
-	void layoutsWithoutAModeAreIgnored() {
-		assertNull(FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - checkerboard, view - packed, primary_eye - none"), 1920, 1080));
+	void checkerboardIsStereoWithoutAMode() {
+		assertEquals("checkerboard (left eye first)", FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - checkerboard, view - packed, primary_eye - none"), 1920, 1080));
+		assertEquals("checkerboard (right eye first)", FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - checkerboard (inverted), view - packed, primary_eye - none"), 1920, 1080));
+	}
+
+	@Test
+	void unsupportedLayoutsWithoutCheckerboardAreIgnored() {
 		assertNull(FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - frame alternate, view - left, primary_eye - none"), 1920, 1080));
 		assertNull(FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - 2D, view - packed, primary_eye - none"), 1920, 1080));
 	}
@@ -127,8 +133,13 @@ class FramePackingParserTest {
 		assertLayout("top-bottom (left eye first)", Mode3D.ABL, "video-h265_frame_packing_top_bottom_left_first.mp4");
 		assertLayout("half top-bottom (right eye first)", Mode3D.AB2R, "video-h265_frame_packing_top_bottom_right_first.ts");
 
-		// The other frame packing arrangements have no 3D mode
-		assertNot3d("video-h264_frame_packing_checkerboard.mp4");
+		// Checkerboard is stereo but has no Mode3D, so conversion must fail visibly
+		MediaVideo checkerboard = getTestFileVideo("video-h264_frame_packing_checkerboard.mp4");
+		assertEquals("checkerboard (left eye first)", checkerboard.getMultiViewLayout());
+		assertTrue(checkerboard.is3d());
+		assertNull(checkerboard.get3DLayout());
+
+		// The other frame packing arrangements are not stereo
 		assertNot3d("video-h264_frame_packing_column_interleaving.mp4");
 		assertNot3d("video-h264_frame_packing_row_interleaving.mp4");
 		assertNot3d("video-h264_frame_packing_temporal_interleaving.mp4");

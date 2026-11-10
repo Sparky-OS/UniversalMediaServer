@@ -46,7 +46,7 @@ public final class FramePackingParser {
 	private static final long TIMEOUT_MS = 5000;
 	// FFmpeg 7.1 added the view, and FFmpeg before 6.0 named it "stereoscopic information"
 	private static final Pattern STEREO_3D = Pattern.compile(
-		"(?:Stereo 3D|stereoscopic information): type - (side by side|top and bottom)( \\(inverted\\))?(?:, view - packed|$)",
+		"(?:Stereo 3D|stereoscopic information): type - (side by side|top and bottom|checkerboard)( \\(inverted\\))?(?:, view - packed|$)",
 		Pattern.MULTILINE
 	);
 
@@ -110,8 +110,8 @@ public final class FramePackingParser {
 	 * @param showinfoOutput the log of FFmpeg
 	 * @param width the width of the video
 	 * @param height the height of the video
-	 * @return the layout, or {@code null} if the first frame is not
-	 *         side by side or top and bottom
+	 * @return the layout, or {@code null} if the first frame has no
+	 *         recognized stereo layout
 	 */
 	public static String getMultiViewLayout(String showinfoOutput, int width, int height) {
 		if (showinfoOutput == null) {
@@ -124,6 +124,10 @@ public final class FramePackingParser {
 		}
 
 		String eye = matcher.group(2) == null ? "left" : "right";
+		if (matcher.group(1).startsWith("checkerboard")) {
+			return "checkerboard (" + eye + " eye first)";
+		}
+
 		if (matcher.group(1).startsWith("side")) {
 			return (width > 1920 ? "" : "half ") + "side by side (" + eye + " eye first)";
 		}
