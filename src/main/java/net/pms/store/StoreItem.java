@@ -508,10 +508,11 @@ public abstract class StoreItem extends StoreResource {
 			StringUtils.isNotBlank(renderer.getOutput3DFormat()) &&
 			!source3DLayout.equals(renderer.getOutput3DFormat())
 		) {
-			throw new IllegalStateException(
-				"No supported conversion can convert \"" + getName() + "\" from \"" +
-				source3DLayout + "\" to \"" + renderer.getOutput3DFormat() + "\""
-			);
+			String message = "No supported conversion can convert \"" + getName() + "\" from \"" +
+				source3DLayout + "\" to \"" + renderer.getOutput3DFormat() + "\"";
+			// The caller logs a failed child at debug level, so say it where the person reads it
+			LOGGER.warn("{}, so it is not offered to {}", message, renderer.getRendererName());
+			throw new IllegalStateException(message);
 		}
 
 		// Should transcoding be skipped for this format?
