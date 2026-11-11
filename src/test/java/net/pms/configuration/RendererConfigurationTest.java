@@ -622,6 +622,23 @@ public class RendererConfigurationTest {
 	}
 
 	@Test
+	public void pcPlayerBehindRygelIsRecognizedAndGetsTheFileAsItIs() throws Exception {
+		PMS.setConfiguration(new UmsConfiguration(false));
+		RendererConfigurations.loadRendererConfigurations();
+
+		RendererConfiguration renderer = RendererConfigurations.getRendererConfigurationByUPNPDetails(
+			"{friendlyName=VLC media player, address=127.0.0.1, udn=uuid:00000000-0000-0000-0000-000000000000, " +
+			"manufacturer=Rygel Developers, modelName=Rygel, modelNumber=46.1, " +
+			"manufacturerURL=http://www.rygel-project.org, modelURL=http://www.rygel-project.org}"
+		);
+
+		assertNotNull(renderer, "Rygel's UPnP details were not recognized");
+		assertEquals("PC stereo player (Rygel MPRIS)", renderer.getRendererName());
+		// The player decodes every packing and declares the pair to the compositor: no conversion
+		assertTrue(renderer.getOutput3DFormat() == null || renderer.getOutput3DFormat().isEmpty());
+	}
+
+	@Test
 	public void flatHeadsetProfileIsRecognizedAndConfiguredForStereo() throws Exception {
 		PMS.setConfiguration(new UmsConfiguration(false));
 		RendererConfigurations.loadRendererConfigurations();
