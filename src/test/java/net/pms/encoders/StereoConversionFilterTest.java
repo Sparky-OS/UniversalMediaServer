@@ -57,29 +57,31 @@ class StereoConversionFilterTest {
 	}
 
 	@Test
-	void rowsColumnsAndFramesGoStraightToTheOutput() {
-		assertEquals(List.of("stereo3d=irl:sbsl"), FFMpegVideo.getStereoConversionFilters(Mode3D.IRL, "sbsl"));
-		assertEquals(List.of("stereo3d=irr:sbsl"), FFMpegVideo.getStereoConversionFilters(Mode3D.IRR, "sbsl"));
-		assertEquals(List.of("stereo3d=icl:abl"), FFMpegVideo.getStereoConversionFilters(Mode3D.ICL, "abl"));
-		assertEquals(List.of("stereo3d=al:sbsl"), FFMpegVideo.getStereoConversionFilters(Mode3D.AL, "sbsl"));
-		assertEquals(List.of("stereo3d=ar:ml"), FFMpegVideo.getStereoConversionFilters(Mode3D.AR, "ml"));
+	void rowsColumnsAndFramesGoToSideBySideFirst() {
+		assertEquals(List.of("stereo3d=irl:sbsl", "sidedata=mode=delete:type=STEREO3D"), FFMpegVideo.getStereoConversionFilters(Mode3D.IRL, "sbsl"));
+		assertEquals(List.of("stereo3d=irr:sbsl", "sidedata=mode=delete:type=STEREO3D"), FFMpegVideo.getStereoConversionFilters(Mode3D.IRR, "sbsl"));
+		assertEquals(List.of("stereo3d=icl:sbsl", "stereo3d=sbsl:abl", "sidedata=mode=delete:type=STEREO3D"), FFMpegVideo.getStereoConversionFilters(Mode3D.ICL, "abl"));
+		assertEquals(List.of("stereo3d=al:sbsl", "sidedata=mode=delete:type=STEREO3D"), FFMpegVideo.getStereoConversionFilters(Mode3D.AL, "sbsl"));
+		assertEquals(List.of("stereo3d=ar:sbsl", "stereo3d=sbsl:ml", "sidedata=mode=delete:type=STEREO3D"), FFMpegVideo.getStereoConversionFilters(Mode3D.AR, "ml"));
 	}
 
 	@Test
 	void columnsWithTheRightEyeFirstAvoidFFmpegsInputThatSwapsTheViews() {
-		assertEquals(List.of("stereo3d=icl:sbsr"), FFMpegVideo.getStereoConversionFilters(Mode3D.ICR, "sbsl"));
-		assertEquals(List.of("stereo3d=icl:sbsr", "stereo3d=sbsl:arcd"), FFMpegVideo.getStereoConversionFilters(Mode3D.ICR, "arcd"));
+		assertEquals(List.of("stereo3d=icl:sbsr", "sidedata=mode=delete:type=STEREO3D"), FFMpegVideo.getStereoConversionFilters(Mode3D.ICR, "sbsl"));
+		assertEquals(List.of("stereo3d=icl:sbsr", "stereo3d=sbsl:arcd", "sidedata=mode=delete:type=STEREO3D"), FFMpegVideo.getStereoConversionFilters(Mode3D.ICR, "arcd"));
 	}
 
 	@Test
 	void checkerboardIsUnpackedByItsOwnFilterThenConverted() {
 		List<String> left = FFMpegVideo.getStereoConversionFilters(Mode3D.CHL, "sbsl");
-		assertEquals(1, left.size());
+		assertEquals(2, left.size());
+		assertEquals("sidedata=mode=delete:type=STEREO3D", left.get(1));
 		assertTrue(left.get(0).startsWith("geq=interpolation=n:lum='if(lt(X,W/2),p(2*X+mod(Y+0,2),Y),"), left.get(0));
 		List<String> right = FFMpegVideo.getStereoConversionFilters(Mode3D.CHR, "ml");
-		assertEquals(2, right.size());
+		assertEquals(3, right.size());
 		assertTrue(right.get(0).contains("mod(Y+1,2)"), right.get(0));
 		assertEquals("stereo3d=sbsl:ml", right.get(1));
+		assertEquals("sidedata=mode=delete:type=STEREO3D", right.get(2));
 	}
 
 	@Test
@@ -125,9 +127,13 @@ class StereoConversionFilterTest {
 	}
 
 	private byte[] convert(String name, File packed, int width, int height, Mode3D layout) throws IOException {
+		return convert(name, packed, width, height, layout, "sbsl");
+	}
+
+	private byte[] convert(String name, File packed, int width, int height, Mode3D layout, String output) throws IOException {
 		String path = run(name,
 			List.of("-f", "rawvideo", "-pix_fmt", "yuv444p", "-s", width + "x" + height, "-i", packed.getAbsolutePath()),
-			String.join(",", FFMpegVideo.getStereoConversionFilters(layout, "sbsl")));
+			String.join(",", FFMpegVideo.getStereoConversionFilters(layout, output)));
 		return Files.readAllBytes(new File(path).toPath());
 	}
 
@@ -155,6 +161,35 @@ class StereoConversionFilterTest {
 		String rightRows = String.format(RIGHT, "X", "floor(Y/2)");
 		assertArrayEquals(reference, convert("irl", picture("irl-in", 64, 64, "if(eq(mod(Y,2),0)," + leftRows + "," + rightRows + ")"), 64, 64, Mode3D.IRL), "rows, left first");
 		assertArrayEquals(reference, convert("irr", picture("irr-in", 64, 64, "if(eq(mod(Y,2),1)," + leftRows + "," + rightRows + ")"), 64, 64, Mode3D.IRR), "rows, right first");
+	}
+
+	@Test
+	void monoOutputIsTheLeftOrTheRightViewWhateverTheOrderOfTheSource() throws IOException {
+		if (EngineFactory.getEngineExecutable(StandardEngineId.FFMPEG_VIDEO) == null) {
+			LOGGER.info("Stereo conversion test on FFmpeg skipped, no FFmpeg engine");
+			return;
+		}
+
+		byte[] leftView = Files.readAllBytes(picture("left-view", 64, 32, String.format(LEFT, "X", "Y")).toPath());
+		byte[] rightView = Files.readAllBytes(picture("right-view", 64, 32, String.format(RIGHT, "X", "Y")).toPath());
+		String left = String.format(LEFT, "floor(X/2)", "Y");
+		String right = String.format(RIGHT, "floor(X/2)", "Y");
+		String leftRows = String.format(LEFT, "X", "floor(Y/2)");
+		String rightRows = String.format(RIGHT, "X", "floor(Y/2)");
+		Object[][] sources = {
+			{Mode3D.CHL, 128, 32, "if(eq(mod(X+Y,2),0)," + left + "," + right + ")"},
+			{Mode3D.CHR, 128, 32, "if(eq(mod(X+Y,2),1)," + left + "," + right + ")"},
+			{Mode3D.ICL, 128, 32, "if(eq(mod(X,2),0)," + left + "," + right + ")"},
+			{Mode3D.ICR, 128, 32, "if(eq(mod(X,2),1)," + left + "," + right + ")"},
+			{Mode3D.IRL, 64, 64, "if(eq(mod(Y,2),0)," + leftRows + "," + rightRows + ")"},
+			{Mode3D.IRR, 64, 64, "if(eq(mod(Y,2),1)," + leftRows + "," + rightRows + ")"}
+		};
+		for (Object[] source : sources) {
+			Mode3D layout = (Mode3D) source[0];
+			File packed = picture(layout + "-mono-in", (int) source[1], (int) source[2], (String) source[3]);
+			assertArrayEquals(leftView, convert(layout + "-ml", packed, (int) source[1], (int) source[2], layout, "ml"), layout + " to the left view");
+			assertArrayEquals(rightView, convert(layout + "-mr", packed, (int) source[1], (int) source[2], layout, "mr"), layout + " to the right view");
+		}
 	}
 
 	@Test
