@@ -105,15 +105,51 @@ class FramePackingParserTest {
 	}
 
 	@Test
-	void checkerboardIsStereoWithoutAMode() {
+	void checkerboardRowsColumnsAndFramesAreStereo() {
 		assertEquals("checkerboard (left eye first)", FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - checkerboard, view - packed, primary_eye - none"), 1920, 1080));
 		assertEquals("checkerboard (right eye first)", FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - checkerboard (inverted), view - packed, primary_eye - none"), 1920, 1080));
+		assertEquals("row interleaved (left eye first)", FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - interleaved lines, view - packed, primary_eye - none"), 1920, 1080));
+		assertEquals("row interleaved (right eye first)", FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - interleaved lines (inverted), view - packed, primary_eye - none"), 1920, 1080));
+		assertEquals("column interleaved (left eye first)", FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - interleaved columns, view - packed, primary_eye - none"), 1920, 1080));
+		assertEquals("column interleaved (right eye first)", FramePackingParser.getMultiViewLayout(showinfo("stereoscopic information: type - interleaved columns (inverted)"), 1920, 1080));
+		assertEquals("both eyes laced in one block (left eye first)", FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - frame alternate, view - left, primary_eye - none"), 1920, 1080));
+		assertEquals("both eyes laced in one block (right eye first)", FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - frame alternate (inverted), view - left, primary_eye - none"), 1920, 1080));
 	}
 
 	@Test
-	void unsupportedLayoutsWithoutCheckerboardAreIgnored() {
-		assertNull(FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - frame alternate, view - left, primary_eye - none"), 1920, 1080));
+	void quincunxIsNamedSoThatItIsRefusedAloud() {
+		assertEquals("side by side quincunx (left eye first)", FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - side by side (quincunx subsampling), view - packed, primary_eye - none"), 1920, 1080));
+		assertEquals("side by side quincunx (right eye first)", FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - side by side (quincunx subsampling) (inverted), view - packed, primary_eye - none"), 1920, 1080));
+	}
+
+	@Test
+	void twoDIsNotStereo() {
 		assertNull(FramePackingParser.getMultiViewLayout(showinfo("Stereo 3D: type - 2D, view - packed, primary_eye - none"), 1920, 1080));
+	}
+
+	@Test
+	void mediaInfoWordsMapToTheModesOfTheViewsTheyMix() {
+		String[][] words = {
+			{"Row Interleaved (left eye first)", "IRL"}, {"Row Interleaved (right eye first)", "IRR"},
+			{"Column Interleaved (left eye first)", "ICL"}, {"Column Interleaved (right eye first)", "ICR"},
+			{"Both Eyes laced in one block (left eye first)", "AL"}, {"Both Eyes laced in one block (right eye first)", "AR"},
+			// MediaInfo spells it "Checkboard"
+			{"Checkboard (left eye first)", "CHL"}, {"Checkboard (right eye first)", "CHR"},
+			{"checkerboard (left eye first)", "CHL"}, {"checkerboard (right eye first)", "CHR"}
+		};
+		for (String[] word : words) {
+			MediaVideo video = new MediaVideo();
+			video.setMultiViewLayout(word[0]);
+			assertTrue(video.is3d(), word[0]);
+			assertFalse(video.multiViewIsAnaglyph(), word[0]);
+			assertEquals(Mode3D.valueOf(word[1]), video.get3DLayout(), word[0]);
+		}
+		for (String word : new String[] {"Anaglyph (cyan/red)", "Anaglyph (green/magenta)", "side by side quincunx (left eye first)"}) {
+			MediaVideo video = new MediaVideo();
+			video.setMultiViewLayout(word);
+			assertTrue(video.is3d(), word);
+			assertNull(video.get3DLayout(), word);
+		}
 	}
 
 	@Test
@@ -133,18 +169,15 @@ class FramePackingParserTest {
 		assertLayout("top-bottom (left eye first)", Mode3D.ABL, "video-h265_frame_packing_top_bottom_left_first.mp4");
 		assertLayout("half top-bottom (right eye first)", Mode3D.AB2R, "video-h265_frame_packing_top_bottom_right_first.ts");
 
-		// Checkerboard is stereo but has no Mode3D, so conversion must fail visibly
-		MediaVideo checkerboard = getTestFileVideo("video-h264_frame_packing_checkerboard.mp4");
-		assertEquals("checkerboard (left eye first)", checkerboard.getMultiViewLayout());
-		assertTrue(checkerboard.is3d());
-		assertNull(checkerboard.get3DLayout());
+		// Checkerboard, columns, rows and temporal interleaving (H.264 D.2.26, table D-9 values 0, 1, 2 and 5)
+		assertLayout("checkerboard (left eye first)", Mode3D.CHL, "video-h264_frame_packing_checkerboard.mp4");
+		assertLayout("column interleaved (left eye first)", Mode3D.ICL, "video-h264_frame_packing_column_interleaving.mp4");
+		assertLayout("row interleaved (left eye first)", Mode3D.IRL, "video-h264_frame_packing_row_interleaving.mp4");
+		assertLayout("both eyes laced in one block (left eye first)", Mode3D.AL, "video-h264_frame_packing_temporal_interleaving.mp4");
+		assertLayout("both eyes laced in one block (left eye first)", Mode3D.AL, "video-h265_frame_packing_temporal_interleaving.mp4");
 
-		// The other frame packing arrangements are not stereo
-		assertNot3d("video-h264_frame_packing_column_interleaving.mp4");
-		assertNot3d("video-h264_frame_packing_row_interleaving.mp4");
-		assertNot3d("video-h264_frame_packing_temporal_interleaving.mp4");
+		// 2D is not stereo
 		assertNot3d("video-h264_frame_packing_2d.mp4");
-		assertNot3d("video-h265_frame_packing_temporal_interleaving.mp4");
 
 		// Matroska's StereoMode, found by MediaInfo
 		assertLayout("Side by Side (left eye first)", Mode3D.SBSL, "video-h264_stereomode_side_by_side_left_first.mkv");

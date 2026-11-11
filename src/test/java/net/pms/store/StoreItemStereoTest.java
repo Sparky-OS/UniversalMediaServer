@@ -100,17 +100,31 @@ class StoreItemStereoTest {
 	@Test
 	void unsupportedPackingFailsVisiblyInsteadOfStreaming() {
 		IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
-			item("h265", "checkerboard (left eye first)", "sbsl", false).resolveTranscodingSettings();
+			item("h265", "side by side quincunx (left eye first)", "sbsl", false).resolveTranscodingSettings();
 		});
-		assertTrue(exception.getMessage().contains("from \"checkerboard (left eye first)\" to \"sbsl\""));
+		assertTrue(exception.getMessage().contains("from \"side by side quincunx (left eye first)\" to \"sbsl\""));
 	}
 
 	@Test
 	void streamedUnsupportedPackingFailsVisiblyInsteadOfStreaming() {
 		IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
-			item("h265", "checkerboard (left eye first)", "sbsl", true).resolveTranscodingSettings();
+			item("h265", "side by side quincunx (left eye first)", "sbsl", true).resolveTranscodingSettings();
 		});
-		assertTrue(exception.getMessage().contains("from \"checkerboard (left eye first)\" to \"sbsl\""));
+		assertTrue(exception.getMessage().contains("from \"side by side quincunx (left eye first)\" to \"sbsl\""));
+	}
+
+	@Test
+	void rowsColumnsCheckerboardAndFramesAreConvertedForTheRenderer() throws Exception {
+		String[] layouts = {
+			"row interleaved (left eye first)", "row interleaved (right eye first)",
+			"column interleaved (left eye first)", "column interleaved (right eye first)",
+			"checkerboard (left eye first)", "checkboard (right eye first)",
+			"both eyes laced in one block (left eye first)", "both eyes laced in one block (right eye first)"
+		};
+		for (String layout : layouts) {
+			assertNotNull(item("h264", layout, "sbsl", false).resolveTranscodingSettings(), layout);
+			assertNotNull(item("h264", layout, "ml", false).resolveTranscodingSettings(), layout + ", mono");
+		}
 	}
 
 	@Test
